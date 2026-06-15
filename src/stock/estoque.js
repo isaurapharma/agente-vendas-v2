@@ -4,6 +4,7 @@
 const XLSX = require('xlsx');
 const path = require('path');
 const fs   = require('fs');
+const { resolverApelido } = require('./apelidos');
 
 const FILE = path.resolve(process.env.STOCK_FILE_PATH || './data/estoque.xlsx');
 const SHEET = 'Estoque';
@@ -69,7 +70,11 @@ function listarTodosProdutos() {
  */
 function buscarProduto(termo) {
   const { dados } = lerPlanilha();
-  const t = normalizar(termo);
+
+  // Tenta resolver apelido primeiro
+  const nomeReal = resolverApelido(termo);
+  const t = normalizar(nomeReal || termo);
+
   return dados.filter(p => normalizar(p.nome).includes(t));
 }
 
@@ -80,7 +85,11 @@ function buscarProduto(termo) {
  */
 function consultarEstoque(idOuNome) {
   const { dados } = lerPlanilha();
-  const t = normalizar(idOuNome);
+
+  // Tenta resolver apelido
+  const nomeReal = resolverApelido(idOuNome);
+  const t = normalizar(nomeReal || idOuNome);
+
   return dados.find(
     p => normalizar(p.id) === t || normalizar(p.nome) === t
   ) || null;
@@ -94,7 +103,10 @@ function consultarEstoque(idOuNome) {
  */
 function baixarEstoque(idOuNome, quantidade) {
   const { wb, dados } = lerPlanilha();
-  const t = normalizar(idOuNome);
+
+  // Tenta resolver apelido
+  const nomeReal = resolverApelido(idOuNome);
+  const t = normalizar(nomeReal || idOuNome);
   const idx = dados.findIndex(
     p => normalizar(p.id) === t || normalizar(p.nome) === t
   );
