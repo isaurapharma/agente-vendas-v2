@@ -1,0 +1,22 @@
+{
+  "name": "whatsapp-sales-agent",
+  "version": "1.0.0",
+  "description": "Agente de vendas WhatsApp com IA, estoque e pagamento PIX",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.24.0",
+    "axios": "^1.7.0",
+    "dotenv": "^16.4.0",
+    "express": "^4.19.0",
+    "xlsx": "^0.18.5",
+    "multer": "^1.4.5-lts.1",
+    "form-data": "^4.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}
