@@ -4,6 +4,7 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const estoque   = require('../stock/estoque');
 const { despacharPedido } = require('../dispatch/pedido');
+const { enviarTexto } = require('../webhook/evolution');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -170,6 +171,17 @@ const TOOLS = [
       },
       required: ['subtotal']
     }
+  },
+  {
+    name: 'enviar_pix',
+    description: 'Envia os dados de pagamento PIX para o cliente em duas mensagens separadas: uma com as instruções e outra só com a chave (para facilitar a cópia). Use sempre que o cliente confirmar o pedido e precisar pagar.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        total: { type: 'number', description: 'Valor total a pagar' }
+      },
+      required: ['total']
+    }
   }
 ];
 
@@ -216,6 +228,27 @@ async function executarFerramenta(nome, input, sessao, clienteNumero) {
       const frete       = subtotal >= freteGratis ? 0 : freteFixo;
       const total       = subtotal + frete;
       return { resultado: { subtotal, frete, total, freteGratis: frete === 0 } };
+    }
+
+    case 'enviar_pix': {
+      const pixKey  = process.env.PIX_KEY;
+      const pixName = process.env.PIX_NAME;
+      const total   = Number(input.total).toFixed(2);
+
+      // Mensagem 1: instruções
+      await enviarTexto(clienteNumero,
+        `💰 *Pagamento via PIX*\n` +
+        `Nome: ${pixName}\n` +
+        `Banco: Santander\n` +
+        `Valor: R$ ${total}\n\n` +
+        `Copie a chave abaixo 👇`
+      );
+
+      // Aguarda 1s e envia a chave sozinha para facilitar cópia
+      await new Promise(r => setTimeout(r, 1000));
+      await enviarTexto(clienteNumero, pixKey);
+
+      return { resultado: { ok: true, mensagem: 'Dados PIX enviados ao cliente em duas mensagens.' } };
     }
 
     case 'despachar_pedido': {
