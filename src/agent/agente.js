@@ -636,6 +636,25 @@ async function executarFerramenta(nome, input, sessao, clienteNumero) {
           `Motivo: ${input.motivo}`
         );
       }
+
+      // Notificação push via ntfy — alarme imediato pro celular do Luiz humano
+      const ntfyTopic = process.env.NTFY_TOPIC;
+      if (ntfyTopic) {
+        try {
+          await fetch(`https://ntfy.sh/${ntfyTopic}`, {
+            method: 'POST',
+            headers: {
+              'Title': '🔔 Luiz, te chamaram!',
+              'Priority': 'urgent',
+              'Tags': 'rotating_light'
+            },
+            body: `Cliente: ${input.cliente}\nMotivo: ${input.motivo}`
+          });
+        } catch (errNtfy) {
+          console.error('[ntfy] Erro ao enviar notificação:', errNtfy);
+        }
+      }
+
       sessao.luizHumanoAtivo = true;
       sessao.luizHumanoUltimaMsg = Date.now();
       return { resultado: { ok: true, mensagem: 'Luiz humano acionado.' } };
