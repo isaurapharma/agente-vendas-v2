@@ -60,6 +60,7 @@ async function handleWebhook(req, res) {
 
   try {
     const body  = req.body;
+    console.log('[Debug]',body?.event);
     const event = body?.event;
 
     // ── Evento: reação / update de mensagem ───────────────────
