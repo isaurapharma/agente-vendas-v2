@@ -75,9 +75,11 @@ async function handleWebhook(req, res) {
     if (event !== 'messages.upsert') return;
 
     const data     = body?.data;
-    const mensagem = data?.message || data?.messages?.[0];
+    // O payload da Evolution API traz a mensagem direto em "data"
+    // (data.key, data.message, data.pushName) — não em data.message.key
+    const mensagem = data?.key ? data : (data?.messages?.[0] || null);
     if (!mensagem) {
-      console.log('[Debug] Nenhuma "mensagem" encontrada em data.message ou data.messages[0]');
+      console.log('[Debug] Nenhuma "mensagem" encontrada em data');
       return;
     }
 
