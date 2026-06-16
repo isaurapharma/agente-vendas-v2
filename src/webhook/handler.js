@@ -9,6 +9,34 @@ const { adicionarApelidos, removerApelidos, verApelidos, listarTodosApelidos } =
 const OWNER        = process.env.OWNER_NUMBER;
 const DELIVERY_JID = process.env.DELIVERY_GROUP_JID;
 
+// ── Números bloqueados ──────────────────────────────────────────
+// O agente NUNCA responde esses números, independente de qualquer coisa.
+// Adicionar/remover via comando BLOQUEAR ADD / BLOQUEAR REMOVE no grupo admin.
+const NUMEROS_BLOQUEADOS = new Set([
+  '5522997487799',
+  '5521972140886',
+  '5521965696252',
+  '5521965184171',
+  '595975183457',
+  '595993461127',
+  '59599209662',
+  '558597470079',
+  '5518981887592',
+  '595992607680',
+  '5521969926165',
+  '5522999454961',
+  '5521982529614',
+  '5521981536611',
+]);
+
+function limparNumero(numero) {
+  return String(numero).replace(/\D/g, '');
+}
+
+function ehBloqueado(numero) {
+  return NUMEROS_BLOQUEADOS.has(limparNumero(numero));
+}
+
 // ── Mapa de pedidos despachados: messageId → clienteNumero ─────
 const pedidosDespachados = new Map();
 
@@ -111,6 +139,12 @@ async function handleWebhook(req, res) {
     const numero   = extrairNumero(remoteJid);
     const pushName = mensagem?.pushName || data?.pushName || 'cliente';
 
+    // ── Número bloqueado: ignora completamente, sem exceção ───
+    if (ehBloqueado(numero)) {
+      console.log(`[Bloqueado] Mensagem de ${numero} ignorada (lista de bloqueio).`);
+      return;
+    }
+
     let textoMensagem = extrairTexto(mensagem);
     console.log('[Debug] Texto extraído:', JSON.stringify(textoMensagem));
 
@@ -134,9 +168,9 @@ async function handleWebhook(req, res) {
     //}
 
     // ── Marca como lida e simula digitando ────────────────────
-    if (mensagem?.key?.id) {
-      await marcarComoLida(remoteJid, mensagem.key.id);
-    }
+    // NÃO marca como lida — assim o Luiz humano vê o badge de não lidas
+    // e sabe que teve atividade ali, mesmo que a IA já tenha respondido.
+    // await marcarComoLida(remoteJid, mensagem.key.id);
     await digitando(remoteJid, 2500);
 
     // ── Processa com o agente IA (cliente final) ──────────────
@@ -362,6 +396,38 @@ async function handleComandosDono(texto, remoteJid) {
       .map(([jid, nome]) => `• *${nome}*: ${jid}`)
       .join('\n');
     await enviarTexto(remoteJid, `📋 *Grupos de revendedores:*\n\n${lista}`);
+    return true;
+  }
+
+  if (t.startsWith('BLOQUEAR ADD:')) {
+    const novoNumero = texto.split(':')[1]?.trim();
+    if (novoNumero) {
+      const n = limparNumero(novoNumero);
+      NUMEROS_BLOQUEADOS.add(n);
+      await enviarTexto(remoteJid, `🚫 Número ${n} adicionado à lista de bloqueio. O agente não vai mais responder ele.`);
+    } else {
+      await enviarTexto(remoteJid, '⚠️ Formato:\nBLOQUEAR ADD: 5521999999999');
+    }
+    return true;
+  }
+
+  if (t.startsWith('BLOQUEAR REMOVE:')) {
+    const numRemover = texto.split(':')[1]?.trim();
+    if (numRemover) {
+      const n = limparNumero(numRemover);
+      const existia = NUMEROS_BLOQUEADOS.delete(n);
+      await enviarTexto(remoteJid,
+        existia ? `✅ Número ${n} removido da lista de bloqueio.` : `⚠️ Número ${n} não estava bloqueado.`
+      );
+    } else {
+      await enviarTexto(remoteJid, '⚠️ Formato:\nBLOQUEAR REMOVE: 5521999999999');
+    }
+    return true;
+  }
+
+  if (t.startsWith('BLOQUEAR VER')) {
+    const lista = Array.from(NUMEROS_BLOQUEADOS).map(n => `• ${n}`).join('\n');
+    await enviarTexto(remoteJid, `🚫 *Números bloqueados:*\n\n${lista || 'Nenhum.'}`);
     return true;
   }
 
