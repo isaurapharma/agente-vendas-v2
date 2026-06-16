@@ -731,13 +731,33 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
   let resposta = null;
 
   while (true) {
-    const resultado = await client.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 1024,
-      system: buildSystemPrompt(_foraHorario, _msgHorario),
-      tools: TOOLS,
-      messages: sessao.historico
-    });
+    let resultado;
+    try {
+      resultado = await client.messages.create({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1024,
+        system: buildSystemPrompt(_foraHorario, _msgHorario),
+        tools: TOOLS,
+        messages: sessao.historico
+      });
+    } catch (errApi) {
+      // PROTEÇÃO CONTRA HISTÓRICO CORROMPIDO:
+      // Se a API recusar a requisição por erro de estrutura (ex: tool_use
+      // sem tool_result de uma sessão antiga/corrompida), reseta o
+      // histórico desse cliente e tenta novamente do zero, ao invés de
+      // travar a conversa pra sempre.
+      const ehErroEstrutura = errApi?.status === 400 &&
+        (errApi?.error?.error?.type === 'invalid_request_error' || errApi?.error?.type === 'invalid_request_error');
+
+      if (ehErroEstrutura && sessao.historico.length > 1) {
+        console.error(`[Agente] Histórico corrompido para ${clienteNumero}, resetando sessão. Erro:`, errApi?.message || errApi);
+        sessao.historico = [{ role: 'user', content: mensagemTexto }];
+        continue;
+      }
+
+      console.error('[Agente] Erro irrecuperável na API:', errApi);
+      throw errApi;
+    }
 
     if (resultado.stop_reason === 'tool_use') {
       sessao.historico.push({ role: 'assistant', content: resultado.content });
@@ -745,11 +765,26 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
       const toolResults = [];
       for (const bloco of resultado.content) {
         if (bloco.type === 'tool_use') {
-          const saida = await executarFerramenta(bloco.name, bloco.input, sessao, clienteNumero);
+          // CRÍTICO: nunca deixar um tool_use sem tool_result correspondente,
+          // mesmo se a ferramenta lançar erro — senão corrompe o histórico
+          // pra sempre (a API passa a rejeitar TODAS as mensagens futuras
+          // dessa sessão com "tool_use ids found without tool_result").
+          let conteudoResultado;
+          try {
+            const saida = await executarFerramenta(bloco.name, bloco.input, sessao, clienteNumero);
+            conteudoResultado = JSON.stringify(saida.resultado);
+          } catch (errFerramenta) {
+            console.error(`[Tool] Erro ao executar ${bloco.name}:`, errFerramenta);
+            conteudoResultado = JSON.stringify({
+              erro: true,
+              mensagem: 'Erro interno ao executar a ferramenta. Acionar Luiz humano se necessário.'
+            });
+          }
+
           toolResults.push({
             type: 'tool_result',
             tool_use_id: bloco.id,
-            content: JSON.stringify(saida.resultado)
+            content: conteudoResultado
           });
         }
       }
