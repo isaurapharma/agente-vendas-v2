@@ -326,7 +326,7 @@ Caixa 50 comprimidos 0.04mg — R$150
 };
 
 // ── System Prompt do Luiz ─────────────────────
-function buildSystemPrompt() {
+function buildSystemPrompt(foraDoHorario = false, msgHorario = "") {
   const pixKey  = process.env.PIX_KEY;
   const pixName = process.env.PIX_NAME;
 
@@ -384,7 +384,10 @@ Após despachar o pedido, enviar ao cliente:
 PAGAMENTO PIX:
 - Nome: ${pixName}
 - Chave: ${pixKey}
-- Banco: Santander`;
+- Banco: Santander
+
+HORÁRIO:
+${foraDoHorario ? `⚠️ ${msgHorario} Pode receber pedido e PIX normalmente, mas deixa claro quando será a entrega. Não precisa repetir isso em toda mensagem, só quando relevante.` : "Horário de entrega: seg-sex 12h às 20h, sábado 12h às 16h. Entrega somente após confirmação do PIX."}\`;
 }
 
 // ── Ferramentas ───────────────────────────────
@@ -645,7 +648,34 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
     sessao.luizHumanoUltimaMsg = null;
   }
 
-  sessao.historico.push({ role: 'user', content: mensagemTexto });
+  // Verifica horário de entrega (horário de Brasília)
+  const _agora = new Date();
+  const _horaBSB = new Date(_agora.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+  const _hora = _horaBSB.getHours();
+  const _diaSemana = _horaBSB.getDay(); // 0=domingo, 6=sábado
+
+  let _foraHorario = false;
+  let _msgHorario = "";
+
+  if (_diaSemana === 0) {
+    // Domingo — não entrega
+    _foraHorario = true;
+    _msgHorario = "DOMINGO: Não há entrega hoje. Pedidos feitos hoje serão entregues na segunda-feira a partir das 12h.";
+  } else if (_diaSemana === 6) {
+    // Sábado — entrega até 16h
+    if (_hora < 12 || _hora >= 16) {
+      _foraHorario = true;
+      _msgHorario = "SÁBADO FORA DO HORÁRIO: Entregas aos sábados são das 12h às 16h. Pedido recebido, entrega na segunda a partir das 12h.";
+    }
+  } else {
+    // Seg-Sex — entrega até 20h
+    if (_hora < 12 || _hora >= 20) {
+      _foraHorario = true;
+      _msgHorario = "FORA DO HORÁRIO: Entregas são das 12h às 20h. Pedido recebido, entrega amanhã a partir das 12h.";
+    }
+  }
+
+  sessao.historico.push({ role: "user", content: mensagemTexto });
 
   if (sessao.historico.length > 40) {
     sessao.historico = sessao.historico.slice(-40);
@@ -657,7 +687,7 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
     const resultado = await client.messages.create({
       model: 'claude-sonnet-4-6',
       max_tokens: 1024,
-      system: buildSystemPrompt(),
+      system: buildSystemPrompt(_foraHorario, _msgHorario),
       tools: TOOLS,
       messages: sessao.historico
     });
