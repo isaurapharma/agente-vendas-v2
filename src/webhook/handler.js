@@ -48,9 +48,7 @@ const GRUPOS_REVENDEDORES = {
   '120363398195263032@g.us': 'Rafael',
   '120363405252871406@g.us': 'Carlos',
   '120363398953557075@g.us': 'Neguett',
-  '120363304267841815@g.us': 'Claudi',
   '120363403741398789@g.us': 'Felipe',
-  '120363407039455353@g.us': 'Suplespharma',
   '120363418454463330@g.us': 'Tribal',
   '120363022703847296@g.us': 'Zé Rolha',
   '120363419343091632@g.us': 'Raphael Leal',
@@ -58,6 +56,15 @@ const GRUPOS_REVENDEDORES = {
   '120363420845403813@g.us': 'Big Jeff',
   '120363400248813120@g.us': 'Ziraldo',
   '120363383370702200@g.us': 'DVD',
+};
+
+// ── Grupos administrativos/controle — agente NUNCA responde ────
+const GRUPOS_BLOQUEADOS = new Set([
+  '120363407039455353@g.us', // Grupo Suplespharma Rio
+  '120363304267841815@g.us', // Entregas Claudinha
+  '120363376341821982@g.us', // Anotações
+  '120363404306878361@g.us', // Entregas Vitor
+]);
 };
 
 function extrairNumero(remoteJid) {
@@ -453,6 +460,24 @@ async function handleComandosDono(texto, remoteJid) {
   if (t.startsWith('BLOQUEAR VER')) {
     const lista = Array.from(NUMEROS_BLOQUEADOS).map(n => `• ${n}`).join('\n');
     await enviarTexto(remoteJid, `🚫 *Números bloqueados:*\n\n${lista || 'Nenhum.'}`);
+    return true;
+  }
+
+  if (t.startsWith('GRUPO BLOQUEAR ADD:')) {
+    const jid = texto.split(':')[1]?.trim();
+    if (jid) {
+      GRUPOS_BLOQUEADOS.add(jid);
+      GRUPOS_REVENDEDORES[jid] && delete GRUPOS_REVENDEDORES[jid];
+      await enviarTexto(remoteJid, `🚫 Grupo ${jid} adicionado à lista de bloqueio. Agente nunca vai responder nele.`);
+    } else {
+      await enviarTexto(remoteJid, '⚠️ Formato:\nGRUPO BLOQUEAR ADD: 120363xxxxxx@g.us');
+    }
+    return true;
+  }
+
+  if (t.startsWith('GRUPO BLOQUEAR VER')) {
+    const lista = Array.from(GRUPOS_BLOQUEADOS).map(j => `• ${j}`).join('\n');
+    await enviarTexto(remoteJid, `🚫 *Grupos bloqueados:*\n\n${lista || 'Nenhum.'}`);
     return true;
   }
 
