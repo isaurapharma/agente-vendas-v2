@@ -6,8 +6,10 @@ const { enviarTexto, marcarComoLida, digitando } = require('./evolution');
 const { isAutorizado, adicionarContato, removerContato } = require('../stock/contatos');
 const { adicionarApelidos, removerApelidos, verApelidos, listarTodosApelidos } = require('../stock/apelidos');
 const { transcreverAudioBase64, transcreverAudioUrl } = require('./transcricao');
+const adminAgent = require('../agent/admin');
 
 const OWNER        = process.env.OWNER_NUMBER;
+const ADMIN_JID    = process.env.ADMIN_GROUP_JID;
 const DELIVERY_JID = process.env.DELIVERY_GROUP_JID;
 
 // ── Números bloqueados ──────────────────────────────────────────
@@ -65,7 +67,19 @@ const GRUPOS_BLOQUEADOS = new Set([
   '120363376341821982@g.us', // Anotações
   '120363404306878361@g.us', // Entregas Vitor
 ]);
-};
+
+// ── Clientes especiais (desconto, VIP, observações) ────────────
+const CLIENTES_ESPECIAIS = {};
+
+// ── Registra as referências compartilhadas no agente admin ────
+adminAgent.registrarReferencias({
+  numerosBloqueados: NUMEROS_BLOQUEADOS,
+  gruposBloqueados: GRUPOS_BLOQUEADOS,
+  gruposRevendedores: GRUPOS_REVENDEDORES,
+  clientesEspeciais: CLIENTES_ESPECIAIS,
+  regrasExtras: { texto: '' },
+  pedidosDoDia: [],
+});
 
 function extrairNumero(remoteJid) {
   return remoteJid.replace(/@.+$/, '');
@@ -134,6 +148,12 @@ async function handleWebhook(req, res) {
     // ── Mensagem de grupo de revendedor ───────────────────────
     if (ehGrupo(remoteJid) && ehGrupoRevendedor(remoteJid)) {
       await handleGrupoRevendedor(mensagem, remoteJid, data);
+      return;
+    }
+
+    // ── Mensagem do grupo Admin: agente administrativo IA ─────
+    if (ehGrupo(remoteJid) && remoteJid === ADMIN_JID) {
+      await handleGrupoAdmin(mensagem, remoteJid);
       return;
     }
 
@@ -286,6 +306,31 @@ async function handleGrupoRevendedor(mensagem, remoteJid, data) {
 
   } catch (err) {
     console.error('[Webhook] Erro no grupo revendedor:', err);
+  }
+}
+
+// ── Handler do grupo Admin: linguagem natural via agente IA ───
+async function handleGrupoAdmin(mensagem, remoteJid) {
+  try {
+    if (mensagem?.key?.fromMe) return;
+
+    const textoMensagem = await extrairTexto(mensagem);
+    if (!textoMensagem) return;
+
+    console.log(`[Admin] Mensagem recebida: ${textoMensagem}`);
+
+    await digitando(remoteJid, 1500);
+
+    const resposta = await adminAgent.processarMensagemAdmin(textoMensagem);
+    if (resposta) {
+      await enviarTexto(remoteJid, resposta);
+    }
+
+  } catch (err) {
+    console.error('[Webhook] Erro no grupo admin:', err);
+    try {
+      await enviarTexto(remoteJid, '⚠️ Deu erro ao processar isso aqui, tenta de novo ou me chama.');
+    } catch (_) {}
   }
 }
 
