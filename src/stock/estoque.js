@@ -204,5 +204,43 @@ module.exports = {
   buscarProduto,
   consultarEstoque,
   baixarEstoque,
-  entrarEstoque
+  entrarEstoque,
+  atualizarPreco
 };
+
+/**
+ * Atualiza apenas o preço de um produto existente, sem alterar estoque.
+ * @param {string} idOuNome
+ * @param {number} novoPreco
+ * @returns {{ ok: boolean, produto?: object, precoAnterior?: number, precoNovo?: number, erro?: string }}
+ */
+function atualizarPreco(idOuNome, novoPreco) {
+  const { wb, dados } = lerPlanilha();
+  const nomeReal = resolverApelido(idOuNome);
+  const t = normalizar(nomeReal || idOuNome);
+
+  const idx = dados.findIndex(
+    p => normalizar(p.id) === t || normalizar(p.nome) === t
+  );
+
+  if (idx === -1) {
+    return { ok: false, erro: `Produto "${idOuNome}" não encontrado no estoque.` };
+  }
+
+  const preco = Number(novoPreco);
+  if (!preco || preco <= 0) {
+    return { ok: false, erro: 'Preço deve ser maior que zero.' };
+  }
+
+  const produto = dados[idx];
+  const precoAnterior = Number(produto.preco);
+  dados[idx] = { ...produto, preco };
+  salvarPlanilha(wb, dados);
+
+  return {
+    ok: true,
+    produto: dados[idx],
+    precoAnterior,
+    precoNovo: preco
+  };
+}
