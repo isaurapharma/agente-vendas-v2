@@ -317,11 +317,22 @@ async function handleGrupoAdmin(mensagem, remoteJid) {
     const textoMensagem = await extrairTexto(mensagem);
     if (!textoMensagem) return;
 
-    console.log(`[Admin] Mensagem recebida: ${textoMensagem}`);
+    // ── Detecta mensagem encaminhada (forward) e captura o JID
+    // de origem, pra permitir bloquear um grupo sem o Luiz humano
+    // precisar saber o que é JID.
+    const jidOrigemForward = extrairJidForward(mensagem);
+
+    let textoParaAgente = textoMensagem;
+    if (jidOrigemForward) {
+      textoParaAgente = `[MENSAGEM ENCAMINHADA DE OUTRO CHAT — JID de origem: ${jidOrigemForward}]\n${textoMensagem}`;
+      console.log(`[Admin] Forward detectado, JID de origem: ${jidOrigemForward}`);
+    }
+
+    console.log(`[Admin] Mensagem recebida: ${textoParaAgente}`);
 
     await digitando(remoteJid, 1500);
 
-    const resposta = await adminAgent.processarMensagemAdmin(textoMensagem);
+    const resposta = await adminAgent.processarMensagemAdmin(textoParaAgente);
     if (resposta) {
       await enviarTexto(remoteJid, resposta);
     }
@@ -332,6 +343,34 @@ async function handleGrupoAdmin(mensagem, remoteJid) {
       await enviarTexto(remoteJid, '⚠️ Deu erro ao processar isso aqui, tenta de novo ou me chama.');
     } catch (_) {}
   }
+}
+
+// ── Extrai o JID de origem de uma mensagem encaminhada ─────────
+// A Evolution API (baseada no Baileys) traz isso em contextInfo,
+// que pode estar em diferentes tipos de mensagem (texto, imagem, etc).
+function extrairJidForward(mensagem) {
+  const msg = mensagem?.message;
+  if (!msg) return null;
+
+  // contextInfo pode estar em qualquer um dos tipos de mensagem
+  const contextInfo =
+    msg?.extendedTextMessage?.contextInfo ||
+    msg?.conversation?.contextInfo ||
+    msg?.imageMessage?.contextInfo ||
+    msg?.videoMessage?.contextInfo ||
+    msg?.audioMessage?.contextInfo ||
+    msg?.documentMessage?.contextInfo ||
+    msg?.messageContextInfo ||
+    null;
+
+  if (!contextInfo) return null;
+
+  // isForwarded indica que foi encaminhada; remoteJid/participant do
+  // contextInfo aponta pro chat de origem em alguns formatos da Evolution
+  const ehForward = contextInfo?.isForwarded || (contextInfo?.forwardingScore || 0) > 0;
+  if (!ehForward) return null;
+
+  return contextInfo?.remoteJid || contextInfo?.participant || null;
 }
 
 // ── Extrator de texto ─────────────────────────────────────────
