@@ -388,7 +388,7 @@ PAGAMENTO PIX:
 - Banco: Santander
 
 HORÁRIO:
-${foraDoHorario ? `⚠️ ${msgHorario} Pode receber pedido e PIX normalmente, mas deixa claro quando será a entrega. Não precisa repetir isso em toda mensagem, só quando relevante.` : "Horário de entrega: seg-sex 12h às 20h, sábado 12h às 16h. Entrega somente após confirmação do PIX."}\`;
+${foraDoHorario ? `⚠️ ${msgHorario} Pode receber pedido e PIX normalmente, mas deixa claro quando será a entrega. Não precisa repetir isso em toda mensagem, só quando relevante.` : "Horário de entrega: seg-sex 12h às 20h, sábado 12h às 16h. Entrega somente após confirmação do PIX."}`;
 }
 
 // ── Ferramentas ───────────────────────────────
@@ -584,20 +584,19 @@ async function executarFerramenta(nome, input, sessao, clienteNumero) {
       const peso = input.pesoGramas || 300;
 
       try {
-        // PAC = 04669, SEDEX = 40010
         const servicos = ['04669', '40010'];
         const resultados = [];
 
         for (const servico of servicos) {
           const url = `http://ws.correios.com.br/calculador/CalcPrecoPrazo.asmx/CalcPrecoPrazo?nCdEmpresa=&sDsSenha=&nCdServico=${servico}&sCepOrigem=${cepOrigem}&sCepDestino=${cepDestino}&nVlPeso=${peso/1000}&nCdFormato=1&nVlComprimento=16&nVlAltura=12&nVlLargura=14&sCdMaoPropria=n&nVlValorDeclarado=0&sCdAvisoRecebimento=n&StrRetorno=xml&nIndicaCalculo=3`;
-          
+
           const res = await fetch(url);
           const xml = await res.text();
-          
+
           const valorMatch = xml.match(/<Valor>(.*?)<\/Valor>/);
           const prazoMatch = xml.match(/<PrazoEntrega>(.*?)<\/PrazoEntrega>/);
           const erroMatch  = xml.match(/<MsgErro>(.*?)<\/MsgErro>/);
-          
+
           if (valorMatch && prazoMatch && !erroMatch?.[1]) {
             const nome = servico === '40010' ? 'SEDEX' : 'PAC';
             const valor = valorMatch[1].replace(',', '.');
@@ -667,7 +666,6 @@ async function executarFerramenta(nome, input, sessao, clienteNumero) {
 
       await enviarTexto(grupoEntrega, msg);
 
-      // Mensagem de confirmação pro cliente
       await enviarTexto(clienteNumero,
         `✅️ Está entregue!\n\n` +
         `🚨Por favor, confira o pedido no mesmo dia! Não nos responsabilizamos por danos após o dia da entrega.\n\n` +
@@ -710,17 +708,14 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
   let _msgHorario = "";
 
   if (_diaSemana === 0) {
-    // Domingo — não entrega
     _foraHorario = true;
     _msgHorario = "DOMINGO: Não há entrega hoje. Pedidos feitos hoje serão entregues na segunda-feira a partir das 12h.";
   } else if (_diaSemana === 6) {
-    // Sábado — entrega até 16h
     if (_hora < 12 || _hora >= 16) {
       _foraHorario = true;
       _msgHorario = "SÁBADO FORA DO HORÁRIO: Entregas aos sábados são das 12h às 16h. Pedido recebido, entrega na segunda a partir das 12h.";
     }
   } else {
-    // Seg-Sex — entrega até 20h
     if (_hora < 12 || _hora >= 20) {
       _foraHorario = true;
       _msgHorario = "FORA DO HORÁRIO: Entregas são das 12h às 20h. Pedido recebido, entrega amanhã a partir das 12h.";
