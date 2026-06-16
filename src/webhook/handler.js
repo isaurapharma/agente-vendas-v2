@@ -155,7 +155,11 @@ async function handleWebhook(req, res) {
     }
 
     // ── Mensagem do grupo Admin: agente administrativo IA ─────
-    if (ehGrupo(remoteJid) && remoteJid === ADMIN_JID) {
+    const adminJidAtual = process.env.ADMIN_GROUP_JID;
+    if (ehGrupo(remoteJid)) {
+      console.log('[Debug] Comparando grupo:', remoteJid, '=== ADMIN_GROUP_JID:', adminJidAtual, '?', remoteJid === adminJidAtual);
+    }
+    if (ehGrupo(remoteJid) && remoteJid === adminJidAtual) {
       await handleGrupoAdmin(mensagem, remoteJid);
       return;
     }
@@ -314,11 +318,18 @@ async function handleGrupoRevendedor(mensagem, remoteJid, data) {
 
 // ── Handler do grupo Admin: linguagem natural via agente IA ───
 async function handleGrupoAdmin(mensagem, remoteJid) {
+  console.log('[Admin] handleGrupoAdmin chamado para remoteJid:', remoteJid);
   try {
-    if (mensagem?.key?.fromMe) return;
+    if (mensagem?.key?.fromMe) {
+      console.log('[Admin] Mensagem do próprio bot, ignorando.');
+      return;
+    }
 
     const textoMensagem = await extrairTexto(mensagem);
-    if (!textoMensagem) return;
+    if (!textoMensagem) {
+      console.log('[Admin] Texto vazio, abortando.');
+      return;
+    }
 
     // ── Detecta mensagem encaminhada (forward) e captura o JID
     // de origem, pra permitir bloquear um grupo sem o Luiz humano
@@ -335,9 +346,13 @@ async function handleGrupoAdmin(mensagem, remoteJid) {
 
     await digitando(remoteJid, 1500);
 
+    console.log('[Admin] Chamando processarMensagemAdmin...');
     const resposta = await adminAgent.processarMensagemAdmin(textoParaAgente);
+    console.log('[Admin] Resposta recebida:', JSON.stringify(resposta));
+
     if (resposta) {
-      await enviarTexto(remoteJid, resposta);
+      const envio = await enviarTexto(remoteJid, resposta);
+      console.log('[Admin] Resultado do envio:', JSON.stringify(envio));
     }
 
   } catch (err) {
