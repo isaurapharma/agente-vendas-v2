@@ -1,6 +1,4 @@
 // src/agent/agente.js
-// Agente IA com Claude — gerencia conversa, ferramentas e decisões
-
 const Anthropic = require('@anthropic-ai/sdk');
 const estoque   = require('../stock/estoque');
 const { despacharPedido } = require('../dispatch/pedido');
@@ -8,19 +6,19 @@ const { enviarTexto } = require('../webhook/evolution');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-// ─────────────────────────────────────────────
-// Memória de sessões por número de WhatsApp
-// (em produção, migre para Redis ou banco de dados)
-// ─────────────────────────────────────────────
 const sessoes = new Map();
 
 function getSessao(numero) {
   if (!sessoes.has(numero)) {
     sessoes.set(numero, {
       historico: [],
-      carrinho: [],         // [{ id, nome, quantidade, precoUnit }]
+      carrinho: [],
       aguardandoPix: false,
-      pedidoPendente: null
+      pedidoPendente: null,
+      luizHumanoAtivo: false,
+      luizHumanoUltimaMsg: null,
+      endereco: null,
+      frete: null
     });
   }
   return sessoes.get(numero);
@@ -33,53 +31,364 @@ function limparCarrinho(numero) {
   s.pedidoPendente = null;
 }
 
-// ─────────────────────────────────────────────
-// System Prompt — personalidade e regras do agente
-// ─────────────────────────────────────────────
-function buildSystemPrompt() {
-  const freteFixo  = Number(process.env.FRETE_FIXO || 10);
-  const freteGratis = Number(process.env.FRETE_GRATIS_ACIMA || 150);
-  const pixKey     = process.env.PIX_KEY;
-  const pixName    = process.env.PIX_NAME;
+// ── Fretes por bairro ─────────────────────────
+const FRETES = {
+  10: ['ipanema','copacabana','leme','leblon'],
+  15: ['botafogo','lagoa','urca'],
+  20: ['flamengo','gloria','glória','gavea','gávea','catete','humaita','humaitá']
+};
 
-  return `Você é o assistente de vendas da loja, mas responde como um amigo próximo e descontraído — sem formalidade, sem "prezado cliente", sem "atenciosamente". Use linguagem natural, emojis com moderação, e seja direto ao ponto.
-
-REGRAS DE COMPORTAMENTO:
-- Responda sempre em português brasileiro informal
-- Seja rápido e objetivo, mas simpático
-- Não use linguagem corporativa
-- Se o cliente perguntar algo que você não sabe, seja honesto
-- Nunca invente preços ou produtos — sempre consulte o estoque
-
-FRETE:
-- Frete fixo: R$ ${freteFixo.toFixed(2)}
-- Frete grátis para pedidos acima de R$ ${freteGratis.toFixed(2)}
-- Sempre informe o frete antes de fechar o pedido
-
-PAGAMENTO PIX:
-- Chave PIX: ${pixKey}
-- Nome: ${pixName}
-- Após o cliente confirmar o pedido, envie a chave PIX e o valor total
-- Aguarde o comprovante no chat
-- Quando receber o comprovante, confirme o pagamento e avise que o pedido foi para entrega
-
-ENTRADA DE ESTOQUE (somente para o dono):
-- Mensagens começando com "ESTOQUE" são comandos do dono da loja
-- Exemplo: "ESTOQUE ENTRADA: Camiseta XG, 10 unidades, R$49.90"
-- Processe a entrada e confirme
-
-CARRINHO:
-- Mantenha o carrinho atualizado durante a conversa
-- Antes de fechar, sempre confirme todos os itens e o total com frete
-- Só dê baixa no estoque APÓS confirmar o PIX
-
-FERRAMENTAS DISPONÍVEIS:
-Use as ferramentas para todas as operações de estoque. Nunca suponha o estoque — sempre consulte.`;
+function calcularFrete(endereco) {
+  if (!endereco) return null;
+  const end = endereco.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  for (const [valor, bairros] of Object.entries(FRETES)) {
+    if (bairros.some(b => end.includes(b))) return Number(valor);
+  }
+  return null; // frete desconhecido — chamar Luiz humano
 }
 
-// ─────────────────────────────────────────────
-// Definição das ferramentas (tools) do Claude
-// ─────────────────────────────────────────────
+// ── Catálogo de produtos (tabelas prontas) ─────
+const CATALOGO = {
+  durateston: `✅ *Durateston - Cooper Farmacêutica* 🇮🇳 ( Linha premium)
+*250mg/ml. Cx com 10 AMPOLAS*
+R$360
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Durateston - Pharmacom* 🇪🇺 ( Linha premium)
+*300mg/ml. Frasco 10ml*
+R$330
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Durateston - Bratva Labs* ✴️
+*250mg/ml. Cx com 10 AMPOLA*
+R$250
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Durateston - Lander Land Gold* 🥇
+*250mg/ml. Frasco 10ml*
+R$210
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Durateston - Muscle Labs* 🐍
+*250mg/ml Frasco 10ml*
+R$190
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Durateston - King Pharma* 👑
+*250mg/ml. Frasco 10ml*
+R$180
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Durateston - Swiss Pharma* 🧬
+*250mg/ml. Frasco 10ml*
+R$140`,
+
+  enantato: `✅ *Enantato de Testosterona - Eminence* 🇮🇳 (Importada)
+*250mg/ml. Cx com 10 AMPOLAS*
+R$360
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Enantato - Bratva Labs* ✴️
+*250mg/ml. Cx com 10 AMPOLA*
+R$250
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Enantato - Lander Land Gold* 🥇
+*250mg/ml. Frasco 10ml*
+R$210
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Enantato - Muscle Labs* 🐍
+*250mg/ml. Frasco 10ml*
+R$190
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Enantato - King Pharma* 👑
+*250mg/ml. Frasco 10ml*
+R$180
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Enantato - Swiss Pharma* 🧬
+*250mg/ml. Frasco 10ml*
+R$140`,
+
+  masteron: `✅️ *Masteron Propionato - Cooper Pharma* 🇮🇳
+*100mg/ml. Cx com 10 Ampolas*
+R$450
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Masteron Propionato - Lander Land Gold* 🥇
+*100mg/ml. Frasco 10ml*
+R$220
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Masteron Propionato - Bratva Labs* ✴️
+*100mg/ml. Frasco 10ml*
+R$200
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Masteron Propionato - Swiss Pharma* 🧬
+*100mg/ml. Frasco 10ml*
+R$140
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Masteron Enantato - King Pharma* 👑
+*100mg/ml. Frasco 10ml*
+R$190
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Masteron Enantato - Swiss Pharma* 🧬
+*200mg/ml. Frasco 10ml*
+R$160`,
+
+  primobolan: `✅️ *Primobolan - Muscle Labs* 🐍
+*100mg/ml. Frasco 10ml*
+R$350
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Primobolan - King Pharma* 👑
+*100mg/ml. Frasco 10ml*
+R$320
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Primobolan - Swiss Pharma* 🧬
+*100mg/ml. Frasco 10ml*
+R$230`,
+
+  deca: `✅ *Deca - Pharmacom* 🇪🇺 (Linha premium)
+*300mg/ml. Cx com 10 AMPOLAS*
+R$350
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅ *Deca - Oxygen* 🇰🇼 (Importada)
+*250mg/ml. Cx com 10 AMPOLAS*
+R$270
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Deca - Lander Land Gold* 🥇
+*200mg/ml. Frasco 10ml*
+R$210
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅ *Deca - Muscle Labs* 🐍
+*300mg/ml. Frasco 10ml*
+R$190
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Deca - King Pharma* 👑
+*300mg/ml. Frasco 10ml*
+R$180
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Deca - Swiss Pharma* 🧬
+*300mg/ml. Frasco 10ml*
+R$140`,
+
+  trembolona: `✅️ *Trembolona Acetato - Lander Land Gold* 🥇
+*100mg/ml. Frasco 10ml*
+R$230
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Trembolona Acetato - Muscle Labs* 🐍
+*100mg/ml. Frasco 10ml*
+R$190
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Trembolona Acetato - Swiss Pharma* 🧬
+*100mg/ml. Frasco 10ml*
+R$140
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+☑️ *Trembolona Enantato - Lander Land Gold* 🥇
+*200mg/ml. Frasco 10ml*
+R$220
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+☑️ *Trembolona Enantato - Swiss Pharma* 🧬
+*200mg/ml. Frasco 10ml*
+R$150`,
+
+  oxandrolona: `✅️ *Oxandrolona - Lander Land*
+*10mg/cps. Frasco 50 comprimidos*
+R$240
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Oxandrolona - Lander Land*
+*5mg/cps. Frasco 100 comprimidos*
+R$240
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Oxandrolona Manipulada* 🧬
+*20mg/cps. Frasco 100 comprimidos*
+R$200
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Oxandrolona Manipulada* 🧬
+*10mg/cps. Frasco 100 comprimidos*
+R$150`,
+
+  peptideos: `✅ *Peptídeos - GEN HEATH* 🧬 (Importado)
+
+📍GHK-cu 100mg — R$850
+📍Most-C 10mg — R$750
+📍Ipamorelin 10mg — R$750
+📍HGH Frag 176-191 5mg — R$750
+📍BPC 157 10mg — R$750
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Peptídeos - ZPHC* 🧬 (Importado)
+
+Ipamorelin 5mg — R$370
+TB500 5mg — R$370
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *NEO Peptídeos* 🧬 (Importado)
+
+GHK-CU 100mg — R$650
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅ *Better Performance* 🧬 (Nacional)
+
+Tesamorelin 5mg — R$180
+TB 500 5mg — R$180
+GHRp6 5mg — R$180
+Slupp 332 5mg — R$180`,
+
+  gh: `💎 *GH Somatropina (Biomanguinhos)*
+*Caixa com 4ui* — R$60
+🚨 (Valor para pedidos acima de 10 cxs)
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+💎 *GH Genotropin caneta 36ui*
+R$1.250`,
+
+  emagrecedores: `✅ *Retatrutida - ZPHC*
+Cx fechada 120mg (5 frascos 24mg c/ diluente) — R$4.300
+Frasco 24mg c/ diluente — R$920
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅ *Retatrutida - Oxygen*
+Frasco 40mg c/ diluente — R$1.450
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *LIPOLESS (Tirzepatida)*
+Cx fechada 60mg — R$1.200
+Frasco 15mg — R$350
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Ozempic caneta 1mg* — R$1.250
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+🔥 *Clembuterol - Lander Land Gold*
+Caixa 50 comprimidos 0.04mg — R$150
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+🔥 *Lipostabil*
+5 ampolas 5ml cada — R$140`
+};
+
+// ── System Prompt do Luiz ─────────────────────
+function buildSystemPrompt() {
+  const pixKey  = process.env.PIX_KEY;
+  const pixName = process.env.PIX_NAME;
+
+  return `Você é o Luiz, vendedor da loja. Não é um robô, não é um agente — é o Luiz mesmo.
+
+PERSONALIDADE:
+- Linguagem carioca, urbana, descontraída. Sem formalidade nenhuma.
+- Usa: opa, bora, fechou, partiu, pra cima, ai papaiii, boa garotão, masss rapazzz, c é loko, tá blz, tá legal, brother
+- Dinheiro = "mingau" (ex: "180 mingau", "10 mingau de entrega")
+- Com clientes conhecidos pode chamar de "amigo", usar "vc é fechamento" e afins
+- Com clientes novos, mais tranquilo, sem intimidade forçada
+- Às vezes faz piadas atuais ou imita o Silvio Santos: "mah oieeee... vem pra k vem pra k... é jequiti q vc qr" 😄
+- Escreve pouco. Direto ao ponto.
+- Nunca usa: "posso te ajudar em algo mais", "prezado", "atenciosamente", "como posso ajudar", frases formais
+- Nunca fala o nome da loja pro cliente
+- Nunca pergunta orçamento
+- Nunca força venda — fala do produto e deixa o cliente decidir
+- "vc é fechamento" só com clientes conhecidos
+
+CONHECIMENTO:
+- Expert em hormônios, suplementos e peptídeos
+- Conhece profundamente: testosterona, primobolan, masteron, trembolona, deca, oxandrolona, GH, peptídeos (GHK-Cu, BPC-157, TB500, Ipamorelin etc), clembuterol, tirzepatida, retatrutida, ozempic
+- Sabe sobre organismo masculino e feminino, ciclos, protocolos, efeitos colaterais, pós-ciclo
+- Quando cliente perguntar dosagem/protocolo: responde de forma prática e sempre menciona que acompanhamento médico ajuda a monitorar com exames (mas sem exagerar na recomendação)
+- Para mulheres: sabe que Masteron preserva feminilidade, Primobolan é mais seguro, doses menores
+
+CATÁLOGO disponível em JSON para consulta quando precisar
+
+FRETE E ENTREGA:
+- Horário de entrega: 12h às 20h
+- Entrega somente após confirmação do PIX
+- Bairros com frete fixo (já calculado automaticamente)
+- Para bairros fora da lista: fala "só um minuto!" e aciona o Luiz humano
+
+PAGAMENTO:
+- Somente PIX
+- Após cliente querer fechar: passa o valor do produto primeiro
+- Quando cliente confirmar: soma com frete e usa a ferramenta enviar_pix
+- PIX enviado em duas mensagens separadas (instruções + chave sozinha pra copiar fácil)
+- Só dá baixa no estoque e despacha pro grupo APÓS confirmar o PIX
+
+LUIZ HUMANO:
+- Quando precisar acionar o Luiz humano (frete desconhecido ou situação complexa): diz "só um minuto!" e usa a ferramenta acionar_luiz_humano
+- Após Luiz humano intervir: aguarda 15 minutos sem responder após última msg do cliente
+- Depois retoma normalmente
+
+MENSAGEM DE ENTREGA CONFIRMADA:
+Após despachar o pedido, enviar ao cliente:
+"✅️ Está entregue!
+
+🚨Por favor, confira o pedido no mesmo dia! Não nos responsabilizamos por danos após o dia da entrega.
+
+*MUITO OBRIGADO E BONS GANHOS!* 💪😄"
+
+PAGAMENTO PIX:
+- Nome: ${pixName}
+- Chave: ${pixKey}
+- Banco: Santander`;
+}
+
+// ── Ferramentas ───────────────────────────────
 const TOOLS = [
   {
     name: 'listar_produtos',
@@ -88,18 +397,18 @@ const TOOLS = [
   },
   {
     name: 'buscar_produto',
-    description: 'Busca produto pelo nome (busca parcial). Use quando o cliente pede um produto específico.',
+    description: 'Busca produto pelo nome (busca parcial, resolve apelidos).',
     input_schema: {
       type: 'object',
       properties: {
-        termo: { type: 'string', description: 'Nome ou parte do nome do produto' }
+        termo: { type: 'string', description: 'Nome ou apelido do produto' }
       },
       required: ['termo']
     }
   },
   {
     name: 'consultar_estoque',
-    description: 'Consulta estoque e preço de um produto específico pelo nome exato ou ID.',
+    description: 'Consulta estoque e preço de um produto específico.',
     input_schema: {
       type: 'object',
       properties: {
@@ -110,71 +419,69 @@ const TOOLS = [
   },
   {
     name: 'baixar_estoque',
-    description: 'Dá baixa no estoque após pagamento PIX confirmado. Só use APÓS confirmar o pagamento.',
+    description: 'Dá baixa no estoque após PIX confirmado.',
     input_schema: {
       type: 'object',
       properties: {
-        produto: { type: 'string', description: 'Nome exato ou ID do produto' },
-        quantidade: { type: 'number', description: 'Quantidade vendida' }
+        produto:    { type: 'string' },
+        quantidade: { type: 'number' }
       },
       required: ['produto', 'quantidade']
     }
   },
   {
     name: 'entrar_estoque',
-    description: 'Dá entrada de produtos no estoque (para o dono da loja).',
+    description: 'Dá entrada de produtos no estoque (dono da loja).',
     input_schema: {
       type: 'object',
       properties: {
-        produto: { type: 'string', description: 'Nome do produto' },
-        quantidade: { type: 'number', description: 'Quantidade a adicionar' },
-        preco: { type: 'number', description: 'Preço unitário (obrigatório para produtos novos)' }
+        produto:    { type: 'string' },
+        quantidade: { type: 'number' },
+        preco:      { type: 'number' }
       },
       required: ['produto', 'quantidade']
     }
   },
   {
-    name: 'despachar_pedido',
-    description: 'Envia o pedido confirmado para o grupo de entrega (motoboy/ajudante). Use após confirmar o PIX.',
+    name: 'enviar_catalogo',
+    description: 'Envia a tabela/catálogo de um produto específico para o cliente, no formato exato das mensagens prontas.',
     input_schema: {
       type: 'object',
       properties: {
-        clienteNome:       { type: 'string' },
-        clienteNumero:     { type: 'string' },
-        itens:             {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              nome:        { type: 'string' },
-              quantidade:  { type: 'number' },
-              precoUnit:   { type: 'number' }
-            }
-          }
-        },
-        subtotal:          { type: 'number' },
-        frete:             { type: 'number' },
-        total:             { type: 'number' },
-        enderecoEntrega:   { type: 'string' },
-        observacoes:       { type: 'string' }
+        categoria: {
+          type: 'string',
+          description: 'Categoria do produto: durateston, enantato, masteron, primobolan, deca, trembolona, oxandrolona, peptideos, gh, emagrecedores'
+        }
       },
-      required: ['clienteNumero', 'itens', 'subtotal', 'frete', 'total']
+      required: ['categoria']
     }
   },
   {
-    name: 'calcular_total',
-    description: 'Calcula subtotal + frete com base nos itens do carrinho.',
+    name: 'calcular_frete',
+    description: 'Calcula o frete com base no endereço do cliente. Retorna o valor ou null se precisar acionar Luiz humano.',
     input_schema: {
       type: 'object',
       properties: {
-        subtotal: { type: 'number', description: 'Soma dos itens sem frete' }
+        endereco: { type: 'string', description: 'Endereço completo do cliente' }
       },
-      required: ['subtotal']
+      required: ['endereco']
+    }
+  },
+  {
+    name: 'acionar_luiz_humano',
+    description: 'Aciona o Luiz humano para situações que precisam de intervenção manual (frete desconhecido, desconto especial, etc). Envia notificação pro grupo admin.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        motivo:  { type: 'string', description: 'Motivo do acionamento' },
+        cliente: { type: 'string', description: 'Número ou nome do cliente' }
+      },
+      required: ['motivo', 'cliente']
     }
   },
   {
     name: 'enviar_pix',
-    description: 'Envia os dados de pagamento PIX para o cliente em duas mensagens separadas: uma com as instruções e outra só com a chave (para facilitar a cópia). Use sempre que o cliente confirmar o pedido e precisar pagar.',
+    description: 'Envia dados do PIX ao cliente em duas mensagens: instruções e chave separada para copiar fácil.',
     input_schema: {
       type: 'object',
       properties: {
@@ -182,12 +489,33 @@ const TOOLS = [
       },
       required: ['total']
     }
+  },
+  {
+    name: 'despachar_pedido',
+    description: 'Envia pedido pro grupo de entrega após PIX confirmado. Não inclui valores.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        clienteNome:     { type: 'string' },
+        clienteNumero:   { type: 'string' },
+        itens:           {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              nome:       { type: 'string' },
+              quantidade: { type: 'number' }
+            }
+          }
+        },
+        enderecoEntrega: { type: 'string' }
+      },
+      required: ['clienteNumero', 'itens', 'enderecoEntrega']
+    }
   }
 ];
 
-// ─────────────────────────────────────────────
-// Executor de ferramentas
-// ─────────────────────────────────────────────
+// ── Executor de ferramentas ───────────────────
 async function executarFerramenta(nome, input, sessao, clienteNumero) {
   console.log(`[Tool] ${nome}`, input);
 
@@ -195,20 +523,17 @@ async function executarFerramenta(nome, input, sessao, clienteNumero) {
 
     case 'listar_produtos': {
       const lista = estoque.listarProdutos();
-      if (lista.length === 0) return { resultado: 'Nenhum produto disponível no momento.' };
-      return { resultado: lista };
+      return { resultado: lista.length ? lista : 'Nenhum produto disponível.' };
     }
 
     case 'buscar_produto': {
       const encontrados = estoque.buscarProduto(input.termo);
-      if (encontrados.length === 0) return { resultado: `Nenhum produto encontrado para "${input.termo}".` };
-      return { resultado: encontrados };
+      return { resultado: encontrados.length ? encontrados : `Nenhum produto encontrado para "${input.termo}".` };
     }
 
     case 'consultar_estoque': {
       const prod = estoque.consultarEstoque(input.produto);
-      if (!prod) return { resultado: `Produto "${input.produto}" não encontrado.` };
-      return { resultado: prod };
+      return { resultado: prod || `Produto "${input.produto}" não encontrado.` };
     }
 
     case 'baixar_estoque': {
@@ -221,13 +546,35 @@ async function executarFerramenta(nome, input, sessao, clienteNumero) {
       return { resultado: r };
     }
 
-    case 'calcular_total': {
-      const freteFixo   = Number(process.env.FRETE_FIXO || 10);
-      const freteGratis = Number(process.env.FRETE_GRATIS_ACIMA || 150);
-      const subtotal    = Number(input.subtotal);
-      const frete       = subtotal >= freteGratis ? 0 : freteFixo;
-      const total       = subtotal + frete;
-      return { resultado: { subtotal, frete, total, freteGratis: frete === 0 } };
+    case 'enviar_catalogo': {
+      const cat = CATALOGO[input.categoria.toLowerCase()];
+      if (!cat) return { resultado: `Categoria "${input.categoria}" não encontrada.` };
+      await enviarTexto(clienteNumero, cat);
+      return { resultado: { ok: true, mensagem: `Catálogo de ${input.categoria} enviado.` } };
+    }
+
+    case 'calcular_frete': {
+      sessao.endereco = input.endereco;
+      const frete = calcularFrete(input.endereco);
+      sessao.frete = frete;
+      if (frete === null) {
+        return { resultado: { frete: null, precisaAcionarLuiz: true, mensagem: 'Bairro fora da zona de frete fixo. Acionar Luiz humano para cotar.' } };
+      }
+      return { resultado: { frete, endereco: input.endereco } };
+    }
+
+    case 'acionar_luiz_humano': {
+      const grupoAdmin = process.env.ADMIN_GROUP_JID;
+      if (grupoAdmin) {
+        await enviarTexto(grupoAdmin,
+          `🔔 *Atenção Luiz!*\n\n` +
+          `Cliente: ${input.cliente}\n` +
+          `Motivo: ${input.motivo}`
+        );
+      }
+      sessao.luizHumanoAtivo = true;
+      sessao.luizHumanoUltimaMsg = Date.now();
+      return { resultado: { ok: true, mensagem: 'Luiz humano acionado.' } };
     }
 
     case 'enviar_pix': {
@@ -235,7 +582,6 @@ async function executarFerramenta(nome, input, sessao, clienteNumero) {
       const pixName = process.env.PIX_NAME;
       const total   = Number(input.total).toFixed(2);
 
-      // Mensagem 1: instruções
       await enviarTexto(clienteNumero,
         `💰 *Pagamento via PIX*\n` +
         `Nome: ${pixName}\n` +
@@ -243,19 +589,39 @@ async function executarFerramenta(nome, input, sessao, clienteNumero) {
         `Valor: R$ ${total}\n\n` +
         `Copie a chave abaixo 👇`
       );
-
-      // Aguarda 1s e envia a chave sozinha para facilitar cópia
       await new Promise(r => setTimeout(r, 1000));
       await enviarTexto(clienteNumero, pixKey);
 
-      return { resultado: { ok: true, mensagem: 'Dados PIX enviados ao cliente em duas mensagens.' } };
+      sessao.aguardandoPix = true;
+      return { resultado: { ok: true } };
     }
 
     case 'despachar_pedido': {
-      const r = await despacharPedido({ ...input, clienteNumero });
-      // Após despachar, limpa a sessão
-      if (r.ok) limparCarrinho(clienteNumero);
-      return { resultado: r };
+      const grupoEntrega = process.env.DELIVERY_GROUP_JID;
+      if (!grupoEntrega) return { resultado: { ok: false, erro: 'DELIVERY_GROUP_JID não configurado.' } };
+
+      const itensTexto = input.itens
+        .map(i => `📦 ${i.nome}${i.quantidade > 1 ? ` (${i.quantidade}x)` : ''}`)
+        .join('\n');
+
+      const msg =
+        `🛵 *PEDIDO — Force Imports*\n\n` +
+        `👤 *Cliente:* ${input.clienteNome || input.clienteNumero}\n` +
+        `📍 *Endereço:* ${input.enderecoEntrega}\n\n` +
+        `${itensTexto}\n\n` +
+        `✅ *PIX confirmado!*`;
+
+      await enviarTexto(grupoEntrega, msg);
+
+      // Mensagem de confirmação pro cliente
+      await enviarTexto(clienteNumero,
+        `✅️ Está entregue!\n\n` +
+        `🚨Por favor, confira o pedido no mesmo dia! Não nos responsabilizamos por danos após o dia da entrega.\n\n` +
+        `*MUITO OBRIGADO E BONS GANHOS!* 💪😄`
+      );
+
+      limparCarrinho(clienteNumero);
+      return { resultado: { ok: true } };
     }
 
     default:
@@ -263,23 +629,31 @@ async function executarFerramenta(nome, input, sessao, clienteNumero) {
   }
 }
 
-// ─────────────────────────────────────────────
-// Loop principal do agente (agentic loop)
-// ─────────────────────────────────────────────
+// ── Loop principal ────────────────────────────
 async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cliente') {
   const sessao = getSessao(clienteNumero);
 
-  // Adiciona mensagem do usuário ao histórico
+  // Se Luiz humano interveio, aguarda 15min após última msg do cliente
+  if (sessao.luizHumanoAtivo) {
+    const agora = Date.now();
+    const quinzeMin = 15 * 60 * 1000;
+    sessao.luizHumanoUltimaMsg = agora;
+    if (agora - sessao.luizHumanoUltimaMsg < quinzeMin) {
+      return null; // não responde
+    }
+    // Passou 15min, retoma
+    sessao.luizHumanoAtivo = false;
+    sessao.luizHumanoUltimaMsg = null;
+  }
+
   sessao.historico.push({ role: 'user', content: mensagemTexto });
 
-  // Limita histórico a 40 mensagens para não explodir o contexto
   if (sessao.historico.length > 40) {
     sessao.historico = sessao.historico.slice(-40);
   }
 
   let resposta = null;
 
-  // ── Agentic loop: continua até o Claude parar de chamar ferramentas ──
   while (true) {
     const resultado = await client.messages.create({
       model: 'claude-sonnet-4-6',
@@ -289,12 +663,9 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
       messages: sessao.historico
     });
 
-    // Se o Claude quer usar ferramentas
     if (resultado.stop_reason === 'tool_use') {
-      // Adiciona a resposta do assistente (com tool_use) ao histórico
       sessao.historico.push({ role: 'assistant', content: resultado.content });
 
-      // Processa cada ferramenta solicitada
       const toolResults = [];
       for (const bloco of resultado.content) {
         if (bloco.type === 'tool_use') {
@@ -307,24 +678,21 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
         }
       }
 
-      // Adiciona resultados das ferramentas ao histórico e continua o loop
       sessao.historico.push({ role: 'user', content: toolResults });
       continue;
     }
 
-    // Claude terminou — extrai o texto de resposta
     resposta = resultado.content
       .filter(b => b.type === 'text')
       .map(b => b.text)
       .join('\n')
       .trim();
 
-    // Adiciona resposta final ao histórico
     sessao.historico.push({ role: 'assistant', content: resposta });
     break;
   }
 
-  return resposta || '(sem resposta)';
+  return resposta || null;
 }
 
 module.exports = { processarMensagem, getSessao };
