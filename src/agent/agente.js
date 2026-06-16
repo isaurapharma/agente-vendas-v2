@@ -435,7 +435,13 @@ PAGAMENTO PIX:
 - Banco: Santander
 
 HORÁRIO:
-${foraDoHorario ? `⚠️ ${msgHorario} Pode receber pedido e PIX normalmente, mas deixa claro quando será a entrega. Não precisa repetir isso em toda mensagem, só quando relevante.` : "Horário de entrega: seg-sex 12h às 20h, sábado 12h às 16h. Entrega somente após confirmação do PIX."}`;
+${foraDoHorario ? `⚠️ ${msgHorario} Pode receber pedido e PIX normalmente, mas deixa claro quando será a entrega. Não precisa repetir isso em toda mensagem, só quando relevante.` : "Horário de entrega: seg-sex 12h às 20h, sábado 12h às 16h. Entrega somente após confirmação do PIX."}
+${(() => {
+  try {
+    const regras = require('./admin').getRegrasExtras();
+    return regras ? `\nREGRAS EXTRAS DEFINIDAS PELO LUIZ HUMANO (seguir com prioridade):\n${regras}` : '';
+  } catch (_) { return ''; }
+})()}`;
 }
 
 // ── Ferramentas ───────────────────────────────
@@ -699,20 +705,32 @@ async function executarFerramenta(nome, input, sessao, clienteNumero) {
     case 'enviar_pix': {
       const pixKey  = process.env.PIX_KEY;
       const pixName = process.env.PIX_NAME;
-      const total   = Number(input.total).toFixed(2);
+
+      let total = Number(input.total);
+      let descontoAplicado = 0;
+
+      try {
+        const especial = require('./admin').getClienteEspecial(clienteNumero);
+        if (especial?.desconto) {
+          descontoAplicado = especial.desconto;
+          total = total * (1 - descontoAplicado / 100);
+        }
+      } catch (_) {}
+
+      const totalFormatado = total.toFixed(2);
 
       await enviarTexto(clienteNumero,
         `💰 *Pagamento via PIX*\n` +
         `Nome: ${pixName}\n` +
         `Banco: Santander\n` +
-        `Valor: R$ ${total}\n\n` +
+        `Valor: R$ ${totalFormatado}\n\n` +
         `Copie a chave abaixo 👇`
       );
       await new Promise(r => setTimeout(r, 1000));
       await enviarTexto(clienteNumero, pixKey);
 
       sessao.aguardandoPix = true;
-      return { resultado: { ok: true } };
+      return { resultado: { ok: true, totalCobrado: totalFormatado, descontoAplicado } };
     }
 
     case 'despachar_pedido': {
@@ -731,6 +749,15 @@ async function executarFerramenta(nome, input, sessao, clienteNumero) {
         `✅ *PIX confirmado!*`;
 
       await enviarTexto(grupoEntrega, msg);
+
+      try {
+        require('./admin').registrarPedidoNoRelatorio({
+          clienteNumero,
+          clienteNome: input.clienteNome || input.clienteNumero,
+          itens: input.itens,
+          enderecoEntrega: input.enderecoEntrega
+        });
+      } catch (_) {}
 
       await enviarTexto(clienteNumero,
         `✅️ Está entregue!\n\n` +
