@@ -11,7 +11,7 @@ const FILE = path.resolve('./data/contatos.json');
 function carregar() {
   if (!fs.existsSync(FILE)) {
     fs.mkdirSync(path.dirname(FILE), { recursive: true });
-    fs.writeFileSync(FILE, JSON.stringify({ numeros: [] }, null, 2));
+    fs.writeFileSync(FILE, JSON.stringify({ numeros: ["522997846457"] }, null, 2));
   }
   return JSON.parse(fs.readFileSync(FILE, 'utf-8'));
 }
