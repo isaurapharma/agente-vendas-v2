@@ -10,7 +10,6 @@ const OWNER        = process.env.OWNER_NUMBER;
 const DELIVERY_JID = process.env.DELIVERY_GROUP_JID;
 
 // ── Mapa de pedidos despachados: messageId → clienteNumero ─────
-// Usado para detectar 👍 do Luiz humano e notificar cliente
 const pedidosDespachados = new Map();
 
 // ── Grupos de revendedores ─────────────────────────────────────
@@ -59,9 +58,13 @@ async function handleWebhook(req, res) {
   res.status(200).json({ ok: true });
 
   try {
-    const body  = req.body;
-    console.log('[Debug]',body?.event);
+    const body = req.body;
+
+    // 🔍 LOG TEMPORÁRIO DE DEBUG — mostra o payload completo recebido
+    console.log('PAYLOAD RAW:', JSON.stringify(body));
+
     const event = body?.event;
+    console.log('[Debug] evento:', event);
 
     // ── Evento: reação / update de mensagem ───────────────────
     if (event === 'messages.update') {
@@ -73,13 +76,22 @@ async function handleWebhook(req, res) {
 
     const data     = body?.data;
     const mensagem = data?.message || data?.messages?.[0];
-    if (!mensagem) return;
+    if (!mensagem) {
+      console.log('[Debug] Nenhuma "mensagem" encontrada em data.message ou data.messages[0]');
+      return;
+    }
 
     const remoteJid = mensagem?.key?.remoteJid || data?.remoteJid;
-    if (!remoteJid) return;
+    if (!remoteJid) {
+      console.log('[Debug] remoteJid não encontrado');
+      return;
+    }
 
     // Ignora mensagens do próprio bot
-    if (mensagem?.key?.fromMe) return;
+    if (mensagem?.key?.fromMe) {
+      console.log('[Debug] Mensagem do próprio bot (fromMe), ignorando');
+      return;
+    }
 
     // ── Mensagem de grupo de revendedor ───────────────────────
     if (ehGrupo(remoteJid) && ehGrupoRevendedor(remoteJid)) {
@@ -88,14 +100,22 @@ async function handleWebhook(req, res) {
     }
 
     // Ignora outros grupos
-    if (ehGrupo(remoteJid)) return;
+    if (ehGrupo(remoteJid)) {
+      console.log('[Debug] Mensagem de grupo não-revendedor, ignorando:', remoteJid);
+      return;
+    }
 
     // ── Mensagem direta (cliente ou dono) ─────────────────────
     const numero   = extrairNumero(remoteJid);
     const pushName = mensagem?.pushName || data?.pushName || 'cliente';
 
     let textoMensagem = extrairTexto(mensagem);
-    if (!textoMensagem) return;
+    console.log('[Debug] Texto extraído:', JSON.stringify(textoMensagem));
+
+    if (!textoMensagem) {
+      console.log('[Debug] Texto vazio após extração, abortando. Estrutura da mensagem:', JSON.stringify(mensagem?.message));
+      return;
+    }
 
     console.log(`[Webhook] Mensagem de ${numero} (${pushName}): ${textoMensagem}`);
 
@@ -118,9 +138,13 @@ async function handleWebhook(req, res) {
     await digitando(remoteJid, 2500);
 
     // ── Processa com o agente IA (cliente final) ──────────────
+    console.log('[Debug] Chamando processarMensagem...');
     const resposta = await processarMensagem(numero, textoMensagem, pushName, false);
+    console.log('[Debug] Resposta do agente:', JSON.stringify(resposta));
+
     if (resposta) {
-      await enviarTexto(remoteJid, resposta);
+      const envio = await enviarTexto(remoteJid, resposta);
+      console.log('[Debug] Resultado do envio:', JSON.stringify(envio));
     }
 
   } catch (err) {
@@ -137,17 +161,13 @@ async function handleMessagesUpdate(body) {
     for (const update of updates) {
       const remoteJid  = update?.key?.remoteJid;
       const messageId  = update?.key?.id;
-      const fromMe     = update?.key?.fromMe;
 
-      // Só interessa updates no grupo Pedidos do dia
       if (remoteJid !== DELIVERY_JID) continue;
 
-      // Verifica se tem reação 👍
       const reactions = update?.update?.messageStubParameters ||
                         update?.reactions ||
                         update?.update?.reactions;
 
-      // Tenta extrair reação de diferentes formatos da Evolution API
       let temJoinha = false;
 
       if (Array.isArray(reactions)) {
@@ -156,10 +176,8 @@ async function handleMessagesUpdate(body) {
         );
       }
 
-      // Também verifica no formato messageStubType (reaction)
       if (!temJoinha && update?.update?.reaction?.text === '👍') {
         temJoinha = true;
-        // O messageId da reação aponta para a mensagem original
         const msgIdOriginal = update?.update?.reaction?.key?.id;
         if (msgIdOriginal && pedidosDespachados.has(msgIdOriginal)) {
           await notificarEntrega(msgIdOriginal);
@@ -190,7 +208,6 @@ async function notificarEntrega(messageId) {
     `*MUITO OBRIGADO E BONS GANHOS!* 💪😄`
   );
 
-  // Remove do mapa após notificar
   pedidosDespachados.delete(messageId);
 }
 
