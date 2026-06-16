@@ -1,892 +1,589 @@
-// src/agent/agente.js
-const Anthropic = require('@anthropic-ai/sdk');
-const estoque   = require('../stock/estoque');
-const { enviarTexto } = require('../webhook/evolution');
+// src/webhook/handler.js
+// Recebe eventos da Evolution API e roteia para o agente
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const { processarMensagem, getSessao } = require('../agent/agente');
+const { enviarTexto, marcarComoLida, digitando } = require('./evolution');
+const { isAutorizado, adicionarContato, removerContato } = require('../stock/contatos');
+const { adicionarApelidos, removerApelidos, verApelidos, listarTodosApelidos } = require('../stock/apelidos');
+const { transcreverAudioBase64, transcreverAudioUrl } = require('./transcricao');
+const adminAgent = require('../agent/admin');
 
-// ── Alerta crítico (créditos esgotados, falhas graves) ────────
-// Dispara notificação ntfy + mensagem no grupo admin. Tem um cooldown
-// simples pra não espamar o Luiz com a mesma falha repetida a cada msg.
-const _ultimoAlerta = {};
-async function dispararAlertaCritico(chave, titulo, mensagem) {
-  const agora = Date.now();
-  const cooldownMs = 10 * 60 * 1000; // 10 minutos entre alertas iguais
-  if (_ultimoAlerta[chave] && (agora - _ultimoAlerta[chave]) < cooldownMs) return;
-  _ultimoAlerta[chave] = agora;
+const OWNER        = process.env.OWNER_NUMBER;
+const ADMIN_JID    = process.env.ADMIN_GROUP_JID;
+const DELIVERY_JID = process.env.DELIVERY_GROUP_JID;
 
-  const ntfyTopic = process.env.NTFY_TOPIC;
-  if (ntfyTopic) {
-    try {
-      await fetch(`https://ntfy.sh/${ntfyTopic}`, {
-        method: 'POST',
-        headers: { 'Title': titulo, 'Priority': 'urgent', 'Tags': 'warning' },
-        body: mensagem
-      });
-    } catch (_) {}
-  }
+// ── Números bloqueados ──────────────────────────────────────────
+// O agente NUNCA responde esses números, independente de qualquer coisa.
+// Adicionar/remover via comando BLOQUEAR ADD / BLOQUEAR REMOVE no grupo admin.
+const NUMEROS_BLOQUEADOS = new Set([
+  '5522997487799',
+  '5521972140886',
+  '5521965696252',
+  '5521965184171',
+  '595975183457',
+  '595993461127',
+  '59599209662',
+  '558597470079',
+  '5518981887592',
+  '595992607680',
+  '5521969926165',
+  '5522999454961',
+  '5521982529614',
+  '5521981536611',
+]);
 
-  const grupoAdmin = process.env.ADMIN_GROUP_JID;
-  if (grupoAdmin) {
-    try {
-      const { enviarTexto } = require('../webhook/evolution');
-      await enviarTexto(grupoAdmin, `🚨 *${titulo}*\n\n${mensagem}`);
-    } catch (_) {}
-  }
+function limparNumero(numero) {
+  return String(numero).replace(/\D/g, '');
 }
 
-const sessoes = new Map();
-
-function getSessao(numero) {
-  if (!sessoes.has(numero)) {
-    sessoes.set(numero, {
-      historico: [],
-      carrinho: [],
-      aguardandoPix: false,
-      pedidoPendente: null,
-      luizHumanoAtivo: false,
-      luizHumanoUltimaMsg: null,
-      endereco: null,
-      frete: null
-    });
-  }
-  return sessoes.get(numero);
+function ehBloqueado(numero) {
+  return NUMEROS_BLOQUEADOS.has(limparNumero(numero));
 }
 
-function limparCarrinho(numero) {
-  const s = getSessao(numero);
-  s.carrinho = [];
-  s.aguardandoPix = false;
-  s.pedidoPendente = null;
-}
+// ── Mapa de pedidos despachados: messageId → clienteNumero ─────
+const pedidosDespachados = new Map();
 
-// ── Fretes por bairro ─────────────────────────
-const FRETES = {
-  10: ['ipanema','copacabana','leme','leblon'],
-  15: ['botafogo','lagoa','urca'],
-  20: ['flamengo','gloria','glória','gavea','gávea','catete','humaita','humaitá']
+// ── Grupos de revendedores ─────────────────────────────────────
+const GRUPOS_REVENDEDORES = {
+  '120363426913801854@g.us': 'Daniel',
+  '120363418902001474@g.us': 'Gabriel',
+  '120363398195263032@g.us': 'Rafael',
+  '120363405252871406@g.us': 'Carlos',
+  '120363398953557075@g.us': 'Neguett',
+  '120363403741398789@g.us': 'Felipe',
+  '120363418454463330@g.us': 'Tribal',
+  '120363022703847296@g.us': 'Zé Rolha',
+  '120363419343091632@g.us': 'Raphael Leal',
+  '120363305190062448@g.us': 'David',
+  '120363420845403813@g.us': 'Big Jeff',
+  '120363400248813120@g.us': 'Ziraldo',
+  '120363383370702200@g.us': 'DVD',
 };
 
-function calcularFrete(endereco) {
-  if (!endereco) return null;
-  const end = endereco.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  for (const [valor, bairros] of Object.entries(FRETES)) {
-    if (bairros.some(b => end.includes(b))) return Number(valor);
-  }
-  return null; // frete desconhecido — chamar Luiz humano
+// ── Grupos administrativos/controle — agente NUNCA responde ────
+const GRUPOS_BLOQUEADOS = new Set([
+  '120363407039455353@g.us', // Grupo Suplespharma Rio
+  '120363304267841815@g.us', // Entregas Claudinha
+  '120363376341821982@g.us', // Anotações
+  '120363404306878361@g.us', // Entregas Vitor
+]);
+
+// ── Clientes especiais (desconto, VIP, observações) ────────────
+const CLIENTES_ESPECIAIS = {};
+
+// ── Registra as referências compartilhadas no agente admin ────
+adminAgent.registrarReferencias({
+  numerosBloqueados: NUMEROS_BLOQUEADOS,
+  gruposBloqueados: GRUPOS_BLOQUEADOS,
+  gruposRevendedores: GRUPOS_REVENDEDORES,
+  clientesEspeciais: CLIENTES_ESPECIAIS,
+  regrasExtras: { texto: '' },
+  pedidosDoDia: [],
+});
+
+function extrairNumero(remoteJid) {
+  return remoteJid.replace(/@.+$/, '');
 }
 
-// ── Catálogo de produtos (tabelas prontas) ─────
-const CATALOGO = {
-  durateston: `✅ *Durateston - Cooper Farmacêutica* 🇮🇳 ( Linha premium)
-*250mg/ml. Cx com 10 AMPOLAS*
-R$360
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Durateston - Pharmacom* 🇪🇺 ( Linha premium)
-*300mg/ml. Frasco 10ml*
-R$330
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Durateston - Bratva Labs* ✴️
-*250mg/ml. Cx com 10 AMPOLA*
-R$250
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Durateston - Lander Land Gold* 🥇
-*250mg/ml. Frasco 10ml*
-R$210
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Durateston - Muscle Labs* 🐍
-*250mg/ml Frasco 10ml*
-R$190
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Durateston - King Pharma* 👑
-*250mg/ml. Frasco 10ml*
-R$180
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Durateston - Swiss Pharma* 🧬
-*250mg/ml. Frasco 10ml*
-R$140`,
-
-  enantato: `✅ *Enantato de Testosterona - Eminence* 🇮🇳 (Importada)
-*250mg/ml. Cx com 10 AMPOLAS*
-R$360
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Enantato - Bratva Labs* ✴️
-*250mg/ml. Cx com 10 AMPOLA*
-R$250
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Enantato - Lander Land Gold* 🥇
-*250mg/ml. Frasco 10ml*
-R$210
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Enantato - Muscle Labs* 🐍
-*250mg/ml. Frasco 10ml*
-R$190
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Enantato - King Pharma* 👑
-*250mg/ml. Frasco 10ml*
-R$180
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Enantato - Swiss Pharma* 🧬
-*250mg/ml. Frasco 10ml*
-R$140`,
-
-  masteron: `✅️ *Masteron Propionato - Cooper Pharma* 🇮🇳
-*100mg/ml. Cx com 10 Ampolas*
-R$450
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Masteron Propionato - Lander Land Gold* 🥇
-*100mg/ml. Frasco 10ml*
-R$220
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Masteron Propionato - Bratva Labs* ✴️
-*100mg/ml. Frasco 10ml*
-R$200
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Masteron Propionato - Swiss Pharma* 🧬
-*100mg/ml. Frasco 10ml*
-R$140
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Masteron Enantato - King Pharma* 👑
-*100mg/ml. Frasco 10ml*
-R$190
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Masteron Enantato - Swiss Pharma* 🧬
-*200mg/ml. Frasco 10ml*
-R$160`,
-
-  primobolan: `✅️ *Primobolan - Muscle Labs* 🐍
-*100mg/ml. Frasco 10ml*
-R$350
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Primobolan - King Pharma* 👑
-*100mg/ml. Frasco 10ml*
-R$320
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Primobolan - Swiss Pharma* 🧬
-*100mg/ml. Frasco 10ml*
-R$230`,
-
-  deca: `✅ *Deca - Pharmacom* 🇪🇺 (Linha premium)
-*300mg/ml. Cx com 10 AMPOLAS*
-R$350
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅ *Deca - Oxygen* 🇰🇼 (Importada)
-*250mg/ml. Cx com 10 AMPOLAS*
-R$270
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Deca - Lander Land Gold* 🥇
-*200mg/ml. Frasco 10ml*
-R$210
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅ *Deca - Muscle Labs* 🐍
-*300mg/ml. Frasco 10ml*
-R$190
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Deca - King Pharma* 👑
-*300mg/ml. Frasco 10ml*
-R$180
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Deca - Swiss Pharma* 🧬
-*300mg/ml. Frasco 10ml*
-R$140`,
-
-  trembolona: `✅️ *Trembolona Acetato - Lander Land Gold* 🥇
-*100mg/ml. Frasco 10ml*
-R$230
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Trembolona Acetato - Muscle Labs* 🐍
-*100mg/ml. Frasco 10ml*
-R$190
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Trembolona Acetato - Swiss Pharma* 🧬
-*100mg/ml. Frasco 10ml*
-R$140
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-☑️ *Trembolona Enantato - Lander Land Gold* 🥇
-*200mg/ml. Frasco 10ml*
-R$220
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-☑️ *Trembolona Enantato - Swiss Pharma* 🧬
-*200mg/ml. Frasco 10ml*
-R$150`,
-
-  oxandrolona: `✅️ *Oxandrolona - Lander Land*
-*10mg/cps. Frasco 50 comprimidos*
-R$240
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Oxandrolona - Lander Land*
-*5mg/cps. Frasco 100 comprimidos*
-R$240
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Oxandrolona Manipulada* 🧬
-*20mg/cps. Frasco 100 comprimidos*
-R$200
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Oxandrolona Manipulada* 🧬
-*10mg/cps. Frasco 100 comprimidos*
-R$150`,
-
-  peptideos: `✅ *Peptídeos - GEN HEATH* 🧬 (Importado)
-
-📍GHK-cu 100mg — R$850
-📍Most-C 10mg — R$750
-📍Ipamorelin 10mg — R$750
-📍HGH Frag 176-191 5mg — R$750
-📍BPC 157 10mg — R$750
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Peptídeos - ZPHC* 🧬 (Importado)
-
-Ipamorelin 5mg — R$370
-TB500 5mg — R$370
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *NEO Peptídeos* 🧬 (Importado)
-
-GHK-CU 100mg — R$650
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅ *Better Performance* 🧬 (Nacional)
-
-Tesamorelin 5mg — R$180
-TB 500 5mg — R$180
-GHRp6 5mg — R$180
-Slupp 332 5mg — R$180`,
-
-  gh: `💎 *GH Somatropina (Biomanguinhos)*
-*Caixa com 4ui* — R$60
-🚨 (Valor para pedidos acima de 10 cxs)
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-💎 *GH Genotropin caneta 36ui*
-R$1.250`,
-
-  emagrecedores: `✅ *Retatrutida - ZPHC*
-Cx fechada 120mg (5 frascos 24mg c/ diluente) — R$4.300
-Frasco 24mg c/ diluente — R$920
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅ *Retatrutida - Oxygen*
-Frasco 40mg c/ diluente — R$1.450
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *LIPOLESS (Tirzepatida)*
-Cx fechada 60mg — R$1.200
-Frasco 15mg — R$350
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Ozempic caneta 1mg* — R$1.250
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-🔥 *Clembuterol - Lander Land Gold*
-Caixa 50 comprimidos 0.04mg — R$150
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-🔥 *Lipostabil*
-5 ampolas 5ml cada — R$140`
-};
-
-// ── System Prompt do Luiz ─────────────────────
-function buildSystemPrompt(foraDoHorario = false, msgHorario = "") {
-  const pixKey  = process.env.PIX_KEY;
-  const pixName = process.env.PIX_NAME;
-
-  return `Você é o Luiz, vendedor da loja. Não é um robô, não é um agente — é o Luiz mesmo.
-
-PERSONALIDADE:
-- Linguagem carioca, urbana, descontraída. Sem formalidade nenhuma.
-- Usa: opa, bora, fechou, partiu, pra cima, ai papaiii, boa garotão, masss rapazzz, c é loko, tá blz, tá legal
-- NUNCA usa "mano" ou "brother" — não fazem parte do vocabulário normal do Luiz
-- "brother" só pode aparecer 1x em todo o atendimento, e só num momento bem pontual de zoeira/finalização leve com cliente que já tem confiança — nunca repetido, nunca em conversa séria
-- Dinheiro = "mingau" (ex: "180 mingau", "10 mingau de entrega")
-- Com clientes conhecidos pode chamar de "amigo", usar "vc é fechamento" e afins
-- Com clientes novos, mais tranquilo, sem intimidade forçada
-- Às vezes faz piadas atuais ou imita o Silvio Santos: "mah oieeee... vem pra k vem pra k... é jequiti q vc qr" 😄
-- ESCREVE POUCO. Frases curtas, direto ao ponto, sem enrolação. Nunca manda parágrafo grande — se precisar passar várias infos, quebra em mensagens curtas e objetivas
-- Responde só o que foi perguntado, sem voltar a explicar o que já foi dito antes na conversa
-- ABERTURA DE CONVERSA: sempre informal, tipo "opa", "eai", "oi", "blz?" — NUNCA "como posso te ajudar", "em que posso ajudar" ou qualquer abertura de atendimento formal. A conversa é entre amigos, não atendimento.
-- Nunca usa: "posso te ajudar em algo mais", "prezado", "atenciosamente", "como posso ajudar", frases formais
-- Nunca fala o nome da loja pro cliente
-- Nunca pergunta orçamento
-- Nunca força venda — fala do produto e deixa o cliente decidir
-- "vc é fechamento" só com clientes conhecidos
-
-CONHECIMENTO:
-- Expert em hormônios, suplementos e peptídeos
-- Conhece profundamente: testosterona, primobolan, masteron, trembolona, deca, oxandrolona, GH, peptídeos (GHK-Cu, BPC-157, TB500, Ipamorelin etc), clembuterol, tirzepatida, retatrutida, ozempic
-- Sabe sobre organismo masculino e feminino, ciclos, protocolos, efeitos colaterais, pós-ciclo
-- Quando cliente perguntar dosagem/protocolo: responde de forma prática e sempre menciona que acompanhamento médico ajuda a monitorar com exames (mas sem exagerar na recomendação)
-- Para mulheres: sabe que Masteron preserva feminilidade, Primobolan é mais seguro, doses menores
-
-CATÁLOGO disponível em JSON para consulta quando precisar
-
-FRETE E ENTREGA:
-- Entrega em qualquer lugar — bairros fixos e Correios
-- Bairros com frete fixo: calculado automaticamente
-- Bairros fora da lista: fala "só um minuto que já coto!" e aciona o Luiz humano (sem explicar que é fora da zona)
-- Correios: quando cliente perguntar, fala "Envio sim! Me passa o CEP que já coto pra você 😄" e usa a ferramenta cotar_correios com o CEP do cliente
-- Nunca mencionar "zona fixa", "fora da área" ou similares — sempre positivo
-
-PAGAMENTO:
-- Somente PIX
-- Após cliente querer fechar: passa o valor do produto primeiro
-- Quando cliente confirmar: soma com frete e usa a ferramenta enviar_pix
-- PIX enviado em duas mensagens separadas (instruções + chave sozinha pra copiar fácil)
-- Só dá baixa no estoque e despacha pro grupo APÓS confirmar o PIX
-
-LUIZ HUMANO:
-- Quando precisar acionar o Luiz humano (frete desconhecido ou situação complexa): diz "só um minuto!" e usa a ferramenta acionar_luiz_humano
-- Após Luiz humano intervir: aguarda 15 minutos sem responder após última msg do cliente
-- Depois retoma normalmente
-
-CONTEXTO E DÚVIDAS — REGRA CRÍTICA:
-- Quando o cliente chega falando algo que pressupõe contexto anterior (ex: "vc enviou o produto lá?", "ficou pra quando?", "qto ficou aquilo?"), SEMPRE primeiro procura no histórico da conversa se já tem essa informação antes de responder.
-- Se achar a info no histórico: responde direto e curto usando ela.
-- Se a mensagem do cliente for vaga e faltar um dado pontual e simples (ex: qual produto, qual quantidade): pode perguntar de volta, bem curto, só o que falta. Ex: "qual produto mesmo?"
-- Se NÃO tiver a informação no histórico e a pergunta não for algo simples de esclarecer (ex: cliente cobra algo específico que a IA não tem registro, ou situação confusa/ambígua): NUNCA diz "não entendi", "não tenho essa informação" ou qualquer variação disso pro cliente. Nesses casos, fala só "só um minutinho!" (ou variação curta) e usa a ferramenta acionar_luiz_humano, explicando o motivo no campo "motivo" pro Luiz humano entender o que está pendente.
-- Regra de ouro: o cliente NUNCA deve perceber que a IA ficou confusa ou sem resposta. Ou ela sabe e responde curto, ou ela aciona o Luiz humano discretamente.
-
-ÁUDIOS (mensagens marcadas com [ÁUDIO TRANSCRITO]):
-- Trate a transcrição como se fosse o texto digitado pelo cliente normalmente.
-- Transcrição automática pode vir com erro, palavra faltando, ou trecho confuso/cortado.
-- Se a transcrição tiver alguma palavra ou trecho que não faz sentido, ficar ambíguo, ou parecer incompleto a ponto de mudar o significado do pedido: NÃO tenta adivinhar nem pede pro cliente repetir o áudio. Aciona o Luiz humano direto, e no campo "motivo" inclui o texto transcrito pra ele entender o que pode estar errado.
-- Se a mensagem vier como "[ÁUDIO ENVIADO — não foi possível transcrever]": aciona o Luiz humano imediatamente, sem tentar adivinhar o conteúdo.
-
-MENSAGEM DE ENTREGA CONFIRMADA:
-Após despachar o pedido, enviar ao cliente:
-"✅️ Está entregue!
-
-🚨Por favor, confira o pedido no mesmo dia! Não nos responsabilizamos por danos após o dia da entrega.
-
-*MUITO OBRIGADO E BONS GANHOS!* 💪😄"
-
-PAGAMENTO PIX:
-- Nome: ${pixName}
-- Chave: ${pixKey}
-- Banco: Santander
-
-HORÁRIO:
-${foraDoHorario ? `⚠️ ${msgHorario} Pode receber pedido e PIX normalmente, mas deixa claro quando será a entrega. Não precisa repetir isso em toda mensagem, só quando relevante.` : "Horário de entrega: seg-sex 12h às 20h, sábado 12h às 16h. Entrega somente após confirmação do PIX."}`;
+function ehGrupo(remoteJid) {
+  return remoteJid.endsWith('@g.us');
 }
 
-// ── Ferramentas ───────────────────────────────
-const TOOLS = [
-  {
-    name: 'listar_produtos',
-    description: 'Lista todos os produtos disponíveis em estoque.',
-    input_schema: { type: 'object', properties: {}, required: [] }
-  },
-  {
-    name: 'buscar_produto',
-    description: 'Busca produto pelo nome (busca parcial, resolve apelidos).',
-    input_schema: {
-      type: 'object',
-      properties: {
-        termo: { type: 'string', description: 'Nome ou apelido do produto' }
-      },
-      required: ['termo']
+function ehGrupoRevendedor(remoteJid) {
+  return !!GRUPOS_REVENDEDORES[remoteJid];
+}
+
+function nomeRevendedor(remoteJid) {
+  return GRUPOS_REVENDEDORES[remoteJid] || 'Revendedor';
+}
+
+// ── Registra pedido despachado para rastrear entrega ──────────
+function registrarPedidoDespachado(messageId, clienteNumero, clienteNome, itens) {
+  pedidosDespachados.set(messageId, { clienteNumero, clienteNome, itens, timestamp: Date.now() });
+  console.log(`[Pedido] Registrado: ${messageId} → ${clienteNumero}`);
+}
+
+// ── Handler principal ──────────────────────────────────────────
+async function handleWebhook(req, res) {
+  res.status(200).json({ ok: true });
+
+  try {
+    const body = req.body;
+
+    // 🔍 LOG TEMPORÁRIO DE DEBUG — mostra o payload completo recebido
+    console.log('PAYLOAD RAW:', JSON.stringify(body));
+
+    const event = body?.event;
+    console.log('[Debug] evento:', event);
+
+    // ── Evento: reação / update de mensagem ───────────────────
+    if (event === 'messages.update') {
+      await handleMessagesUpdate(body);
+      return;
     }
-  },
-  {
-    name: 'consultar_estoque',
-    description: 'Consulta estoque e preço de um produto específico.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        produto: { type: 'string', description: 'Nome exato ou ID do produto' }
-      },
-      required: ['produto']
+
+    if (event !== 'messages.upsert') return;
+
+    const data     = body?.data;
+    // O payload da Evolution API traz a mensagem direto em "data"
+    // (data.key, data.message, data.pushName) — não em data.message.key
+    const mensagem = data?.key ? data : (data?.messages?.[0] || null);
+    if (!mensagem) {
+      console.log('[Debug] Nenhuma "mensagem" encontrada em data');
+      return;
     }
-  },
-  {
-    name: 'baixar_estoque',
-    description: 'Dá baixa no estoque após PIX confirmado.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        produto:    { type: 'string' },
-        quantidade: { type: 'number' }
-      },
-      required: ['produto', 'quantidade']
+
+    // 🎯 MARCADOR EXCLUSIVO: mostra o tipo exato da mensagem recebida
+    console.log('[TIPO_MSG]', mensagem?.messageType || Object.keys(mensagem?.message || {}).join(','));
+
+    const remoteJid = mensagem?.key?.remoteJid || data?.remoteJid;
+    if (!remoteJid) {
+      console.log('[Debug] remoteJid não encontrado');
+      return;
     }
-  },
-  {
-    name: 'entrar_estoque',
-    description: 'Dá entrada de produtos no estoque (dono da loja).',
-    input_schema: {
-      type: 'object',
-      properties: {
-        produto:    { type: 'string' },
-        quantidade: { type: 'number' },
-        preco:      { type: 'number' }
-      },
-      required: ['produto', 'quantidade']
+
+    // Ignora mensagens do próprio bot
+    if (mensagem?.key?.fromMe) {
+      console.log('[Debug] Mensagem do próprio bot (fromMe), ignorando');
+      return;
     }
-  },
-  {
-    name: 'enviar_catalogo',
-    description: 'Envia a tabela/catálogo de um produto específico para o cliente, no formato exato das mensagens prontas.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        categoria: {
-          type: 'string',
-          description: 'Categoria do produto: durateston, enantato, masteron, primobolan, deca, trembolona, oxandrolona, peptideos, gh, emagrecedores'
-        }
-      },
-      required: ['categoria']
+
+    // ── Mensagem de grupo de revendedor ───────────────────────
+    if (ehGrupo(remoteJid) && ehGrupoRevendedor(remoteJid)) {
+      await handleGrupoRevendedor(mensagem, remoteJid, data);
+      return;
     }
-  },
-  {
-    name: 'calcular_frete',
-    description: 'Calcula o frete com base no endereço do cliente. Retorna o valor ou null se precisar acionar Luiz humano.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        endereco: { type: 'string', description: 'Endereço completo do cliente' }
-      },
-      required: ['endereco']
+
+    // ── Mensagem do grupo Admin: agente administrativo IA ─────
+    const adminJidAtual = process.env.ADMIN_GROUP_JID;
+    if (ehGrupo(remoteJid)) {
+      console.log('[Debug] Comparando grupo:', remoteJid, '=== ADMIN_GROUP_JID:', adminJidAtual, '?', remoteJid === adminJidAtual);
     }
-  },
-  {
-    name: 'cotar_correios',
-    description: 'Cota o frete pelos Correios (PAC e SEDEX) a partir do CEP do cliente. CEP de origem: Copacabana (22020-000).',
-    input_schema: {
-      type: 'object',
-      properties: {
-        cepDestino: { type: 'string', description: 'CEP do cliente (só números)' },
-        pesoGramas: { type: 'number', description: 'Peso do pedido em gramas (padrão 300g por frasco)' }
-      },
-      required: ['cepDestino']
+    if (ehGrupo(remoteJid) && remoteJid === adminJidAtual) {
+      await handleGrupoAdmin(mensagem, remoteJid);
+      return;
     }
-  },
-  {
-    name: 'acionar_luiz_humano',
-    description: 'Aciona o Luiz humano para situações que precisam de intervenção manual (frete desconhecido, desconto especial, etc). Envia notificação pro grupo admin.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        motivo:  { type: 'string', description: 'Motivo do acionamento' },
-        cliente: { type: 'string', description: 'Número ou nome do cliente' }
-      },
-      required: ['motivo', 'cliente']
+
+    // Ignora outros grupos
+    if (ehGrupo(remoteJid)) {
+      console.log('[Debug] Mensagem de grupo não-revendedor, ignorando:', remoteJid);
+      return;
     }
-  },
-  {
-    name: 'enviar_pix',
-    description: 'Envia dados do PIX ao cliente em duas mensagens: instruções e chave separada para copiar fácil.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        total: { type: 'number', description: 'Valor total a pagar' }
-      },
-      required: ['total']
+
+    // ── Mensagem direta (cliente ou dono) ─────────────────────
+    const numero   = extrairNumero(remoteJid);
+    const pushName = mensagem?.pushName || data?.pushName || 'cliente';
+
+    // ── Número bloqueado: ignora completamente, sem exceção ───
+    if (ehBloqueado(numero)) {
+      console.log(`[Bloqueado] Mensagem de ${numero} ignorada (lista de bloqueio).`);
+      return;
     }
-  },
-  {
-    name: 'despachar_pedido',
-    description: 'Envia pedido pro grupo de entrega após PIX confirmado. Não inclui valores.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        clienteNome:     { type: 'string' },
-        clienteNumero:   { type: 'string' },
-        itens:           {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              nome:       { type: 'string' },
-              quantidade: { type: 'number' }
-            }
-          }
-        },
-        enderecoEntrega: { type: 'string' }
-      },
-      required: ['clienteNumero', 'itens', 'enderecoEntrega']
+
+    let textoMensagem = await extrairTexto(mensagem);
+    console.log('[Debug] Texto extraído:', JSON.stringify(textoMensagem));
+
+    if (!textoMensagem) {
+      console.log('[Debug] Texto vazio após extração, abortando. Estrutura da mensagem:', JSON.stringify(mensagem?.message));
+      return;
     }
+
+    console.log(`[Webhook] Mensagem de ${numero} (${pushName}): ${textoMensagem}`);
+
+    // ── Comandos do dono ──────────────────────────────────────
+    if (numero === OWNER) {
+      const tratado = await handleComandosDono(textoMensagem, remoteJid);
+      if (tratado) return;
+    }
+
+    // ── Verifica se número é autorizado ───────────────────────
+    //if (!isAutorizado(numero)) {
+     // console.log(`[Webhook] Número não autorizado: ${numero} — ignorado.`);
+     // return;
+    //}
+
+    // ── Marca como lida e simula digitando ────────────────────
+    // NÃO marca como lida — assim o Luiz humano vê o badge de não lidas
+    // e sabe que teve atividade ali, mesmo que a IA já tenha respondido.
+    // await marcarComoLida(remoteJid, mensagem.key.id);
+    await digitando(remoteJid, 2500);
+
+    // ── Processa com o agente IA (cliente final) ──────────────
+    console.log('[Debug] Chamando processarMensagem...');
+    const resposta = await processarMensagem(numero, textoMensagem, pushName, false);
+    console.log('[Debug] Resposta do agente:', JSON.stringify(resposta));
+
+    if (resposta) {
+      const envio = await enviarTexto(remoteJid, resposta);
+      console.log('[Debug] Resultado do envio:', JSON.stringify(envio));
+    }
+
+  } catch (err) {
+    console.error('[Webhook] Erro não tratado:', err);
+    // Garante que o cliente nunca fique sem nenhuma resposta por erro interno
+    try {
+      const body = req.body;
+      const data = body?.data;
+      const mensagem = data?.key ? data : (data?.messages?.[0] || null);
+      const remoteJid = mensagem?.key?.remoteJid;
+      if (remoteJid && !remoteJid.endsWith('@g.us')) {
+        await enviarTexto(remoteJid, 'opa, deu um perrengue aqui rapidinho! já volto 🙏');
+      }
+    } catch (_) {}
   }
-];
+}
 
-// ── Executor de ferramentas ───────────────────
-async function executarFerramenta(nome, input, sessao, clienteNumero) {
-  console.log(`[Tool] ${nome}`, input);
+// ── Detecta 👍 do Luiz humano no grupo Pedidos do dia ─────────
+async function handleMessagesUpdate(body) {
+  try {
+    const updates = body?.data;
+    if (!Array.isArray(updates)) return;
 
-  switch (nome) {
+    for (const update of updates) {
+      const remoteJid  = update?.key?.remoteJid;
+      const messageId  = update?.key?.id;
 
-    case 'listar_produtos': {
-      const lista = estoque.listarProdutos();
-      return { resultado: lista.length ? lista : 'Nenhum produto disponível.' };
-    }
+      if (remoteJid !== DELIVERY_JID) continue;
 
-    case 'buscar_produto': {
-      const encontrados = estoque.buscarProduto(input.termo);
-      return { resultado: encontrados.length ? encontrados : `Nenhum produto encontrado para "${input.termo}".` };
-    }
+      const reactions = update?.update?.messageStubParameters ||
+                        update?.reactions ||
+                        update?.update?.reactions;
 
-    case 'consultar_estoque': {
-      const prod = estoque.consultarEstoque(input.produto);
-      return { resultado: prod || `Produto "${input.produto}" não encontrado.` };
-    }
+      let temJoinha = false;
 
-    case 'baixar_estoque': {
-      const r = estoque.baixarEstoque(input.produto, input.quantidade);
-      return { resultado: r };
-    }
-
-    case 'entrar_estoque': {
-      const r = estoque.entrarEstoque(input.produto, input.quantidade, input.preco || null);
-      return { resultado: r };
-    }
-
-    case 'enviar_catalogo': {
-      const cat = CATALOGO[input.categoria.toLowerCase()];
-      if (!cat) return { resultado: `Categoria "${input.categoria}" não encontrada.` };
-      await enviarTexto(clienteNumero, cat);
-      return { resultado: { ok: true, mensagem: `Catálogo de ${input.categoria} enviado.` } };
-    }
-
-    case 'calcular_frete': {
-      sessao.endereco = input.endereco;
-      const frete = calcularFrete(input.endereco);
-      sessao.frete = frete;
-      if (frete === null) {
-        return { resultado: { frete: null, precisaAcionarLuiz: true, mensagem: 'Bairro fora da zona de frete fixo. Acionar Luiz humano para cotar.' } };
-      }
-      return { resultado: { frete, endereco: input.endereco } };
-    }
-
-    case 'cotar_correios': {
-      const cepOrigem = '22020000';
-      const cepDestino = input.cepDestino.replace(/\D/g, '');
-      const peso = input.pesoGramas || 300;
-
-      try {
-        const servicos = ['04669', '40010'];
-        const resultados = [];
-
-        for (const servico of servicos) {
-          const url = `http://ws.correios.com.br/calculador/CalcPrecoPrazo.asmx/CalcPrecoPrazo?nCdEmpresa=&sDsSenha=&nCdServico=${servico}&sCepOrigem=${cepOrigem}&sCepDestino=${cepDestino}&nVlPeso=${peso/1000}&nCdFormato=1&nVlComprimento=16&nVlAltura=12&nVlLargura=14&sCdMaoPropria=n&nVlValorDeclarado=0&sCdAvisoRecebimento=n&StrRetorno=xml&nIndicaCalculo=3`;
-
-          const res = await fetch(url);
-          const xml = await res.text();
-
-          const valorMatch = xml.match(/<Valor>(.*?)<\/Valor>/);
-          const prazoMatch = xml.match(/<PrazoEntrega>(.*?)<\/PrazoEntrega>/);
-          const erroMatch  = xml.match(/<MsgErro>(.*?)<\/MsgErro>/);
-
-          if (valorMatch && prazoMatch && !erroMatch?.[1]) {
-            const nome = servico === '40010' ? 'SEDEX' : 'PAC';
-            const valor = valorMatch[1].replace(',', '.');
-            const prazo = prazoMatch[1];
-            resultados.push({ servico: nome, valor: parseFloat(valor), prazo: `${prazo} dias úteis` });
-          }
-        }
-
-        if (resultados.length === 0) {
-          return { resultado: { ok: false, erro: 'Não foi possível cotar. Acionar Luiz humano.' } };
-        }
-
-        return { resultado: { ok: true, opcoes: resultados } };
-
-      } catch (err) {
-        return { resultado: { ok: false, erro: 'Erro ao consultar Correios. Acionar Luiz humano.' } };
-      }
-    }
-
-    case 'acionar_luiz_humano': {
-      const grupoAdmin = process.env.ADMIN_GROUP_JID;
-      if (grupoAdmin) {
-        await enviarTexto(grupoAdmin,
-          `🔔 *Atenção Luiz!*\n\n` +
-          `Cliente: ${input.cliente}\n` +
-          `Motivo: ${input.motivo}`
+      if (Array.isArray(reactions)) {
+        temJoinha = reactions.some(r =>
+          r?.text === '👍' || r?.emoji === '👍' || r === '👍'
         );
       }
 
-      // Notificação push via ntfy — alarme imediato pro celular do Luiz humano
-      const ntfyTopic = process.env.NTFY_TOPIC;
-      if (ntfyTopic) {
-        try {
-          await fetch(`https://ntfy.sh/${ntfyTopic}`, {
-            method: 'POST',
-            headers: {
-              'Title': '🔔 Luiz, te chamaram!',
-              'Priority': 'urgent',
-              'Tags': 'rotating_light'
-            },
-            body: `Cliente: ${input.cliente}\nMotivo: ${input.motivo}`
-          });
-        } catch (errNtfy) {
-          console.error('[ntfy] Erro ao enviar notificação:', errNtfy);
+      if (!temJoinha && update?.update?.reaction?.text === '👍') {
+        temJoinha = true;
+        const msgIdOriginal = update?.update?.reaction?.key?.id;
+        if (msgIdOriginal && pedidosDespachados.has(msgIdOriginal)) {
+          await notificarEntrega(msgIdOriginal);
+          continue;
         }
       }
 
-      sessao.luizHumanoAtivo = true;
-      sessao.luizHumanoUltimaMsg = Date.now();
-      return { resultado: { ok: true, mensagem: 'Luiz humano acionado.' } };
+      if (temJoinha && messageId && pedidosDespachados.has(messageId)) {
+        await notificarEntrega(messageId);
+      }
     }
-
-    case 'enviar_pix': {
-      const pixKey  = process.env.PIX_KEY;
-      const pixName = process.env.PIX_NAME;
-      const total   = Number(input.total).toFixed(2);
-
-      await enviarTexto(clienteNumero,
-        `💰 *Pagamento via PIX*\n` +
-        `Nome: ${pixName}\n` +
-        `Banco: Santander\n` +
-        `Valor: R$ ${total}\n\n` +
-        `Copie a chave abaixo 👇`
-      );
-      await new Promise(r => setTimeout(r, 1000));
-      await enviarTexto(clienteNumero, pixKey);
-
-      sessao.aguardandoPix = true;
-      return { resultado: { ok: true } };
-    }
-
-    case 'despachar_pedido': {
-      const grupoEntrega = process.env.DELIVERY_GROUP_JID;
-      if (!grupoEntrega) return { resultado: { ok: false, erro: 'DELIVERY_GROUP_JID não configurado.' } };
-
-      const itensTexto = input.itens
-        .map(i => `📦 ${i.nome}${i.quantidade > 1 ? ` (${i.quantidade}x)` : ''}`)
-        .join('\n');
-
-      const msg =
-        `🛵 *PEDIDO — Force Imports*\n\n` +
-        `👤 *Cliente:* ${input.clienteNome || input.clienteNumero}\n` +
-        `📍 *Endereço:* ${input.enderecoEntrega}\n\n` +
-        `${itensTexto}\n\n` +
-        `✅ *PIX confirmado!*`;
-
-      await enviarTexto(grupoEntrega, msg);
-
-      await enviarTexto(clienteNumero,
-        `✅️ Está entregue!\n\n` +
-        `🚨Por favor, confira o pedido no mesmo dia! Não nos responsabilizamos por danos após o dia da entrega.\n\n` +
-        `*MUITO OBRIGADO E BONS GANHOS!* 💪😄`
-      );
-
-      limparCarrinho(clienteNumero);
-      return { resultado: { ok: true } };
-    }
-
-    default:
-      return { resultado: `Ferramenta desconhecida: ${nome}` };
+  } catch (err) {
+    console.error('[MessagesUpdate] Erro:', err);
   }
 }
 
-// ── Loop principal ────────────────────────────
-async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cliente') {
-  const sessao = getSessao(clienteNumero);
+// ── Envia mensagem de entrega confirmada ao cliente ───────────
+async function notificarEntrega(messageId) {
+  const pedido = pedidosDespachados.get(messageId);
+  if (!pedido) return;
 
-  // Se Luiz humano interveio, aguarda 15min após última msg do cliente
-  if (sessao.luizHumanoAtivo) {
-    const agora = Date.now();
-    const quinzeMin = 15 * 60 * 1000;
-    sessao.luizHumanoUltimaMsg = agora;
-    if (agora - sessao.luizHumanoUltimaMsg < quinzeMin) {
-      return null; // não responde
+  console.log(`[Entrega] 👍 detectado! Notificando cliente ${pedido.clienteNumero}`);
+
+  const clienteJid = `${pedido.clienteNumero}@s.whatsapp.net`;
+  await enviarTexto(clienteJid,
+    `✅️ Está entregue!\n\n` +
+    `🚨Por favor, confira o pedido no mesmo dia! Não nos responsabilizamos por danos após o dia da entrega.\n\n` +
+    `*MUITO OBRIGADO E BONS GANHOS!* 💪😄`
+  );
+
+  pedidosDespachados.delete(messageId);
+}
+
+// ── Handler de grupos de revendedores ─────────────────────────
+async function handleGrupoRevendedor(mensagem, remoteJid, data) {
+  try {
+    if (mensagem?.key?.fromMe) return;
+
+    const pushName      = mensagem?.pushName || data?.pushName || 'revendedor';
+    const textoMensagem = await extrairTexto(mensagem);
+    if (!textoMensagem) return;
+
+    const nomeRev = nomeRevendedor(remoteJid);
+    console.log(`[Revendedor] ${nomeRev} (${remoteJid}): ${textoMensagem}`);
+
+    await digitando(remoteJid, 2000);
+
+    const resposta = await processarMensagem(remoteJid, textoMensagem, nomeRev, true);
+    if (resposta) {
+      await enviarTexto(remoteJid, resposta);
     }
-    // Passou 15min, retoma
-    sessao.luizHumanoAtivo = false;
-    sessao.luizHumanoUltimaMsg = null;
+
+  } catch (err) {
+    console.error('[Webhook] Erro no grupo revendedor:', err);
   }
+}
 
-  // Verifica horário de entrega (horário de Brasília)
-  const _agora = new Date();
-  const _horaBSB = new Date(_agora.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
-  const _hora = _horaBSB.getHours();
-  const _diaSemana = _horaBSB.getDay(); // 0=domingo, 6=sábado
-
-  let _foraHorario = false;
-  let _msgHorario = "";
-
-  if (_diaSemana === 0) {
-    _foraHorario = true;
-    _msgHorario = "DOMINGO: Não há entrega hoje. Pedidos feitos hoje serão entregues na segunda-feira a partir das 12h.";
-  } else if (_diaSemana === 6) {
-    if (_hora < 12 || _hora >= 16) {
-      _foraHorario = true;
-      _msgHorario = "SÁBADO FORA DO HORÁRIO: Entregas aos sábados são das 12h às 16h. Pedido recebido, entrega na segunda a partir das 12h.";
+// ── Handler do grupo Admin: linguagem natural via agente IA ───
+async function handleGrupoAdmin(mensagem, remoteJid) {
+  console.log('[Admin] handleGrupoAdmin chamado para remoteJid:', remoteJid);
+  try {
+    if (mensagem?.key?.fromMe) {
+      console.log('[Admin] Mensagem do próprio bot, ignorando.');
+      return;
     }
-  } else {
-    if (_hora < 12 || _hora >= 20) {
-      _foraHorario = true;
-      _msgHorario = "FORA DO HORÁRIO: Entregas são das 12h às 20h. Pedido recebido, entrega amanhã a partir das 12h.";
+
+    const textoMensagem = await extrairTexto(mensagem);
+    if (!textoMensagem) {
+      console.log('[Admin] Texto vazio, abortando.');
+      return;
     }
-  }
 
-  sessao.historico.push({ role: "user", content: mensagemTexto });
+    // ── Detecta mensagem encaminhada (forward) e captura o JID
+    // de origem, pra permitir bloquear um grupo sem o Luiz humano
+    // precisar saber o que é JID.
+    const jidOrigemForward = extrairJidForward(mensagem);
 
-  if (sessao.historico.length > 40) {
-    sessao.historico = sessao.historico.slice(-40);
-  }
+    let textoParaAgente = textoMensagem;
+    if (jidOrigemForward) {
+      textoParaAgente = `[MENSAGEM ENCAMINHADA DE OUTRO CHAT — JID de origem: ${jidOrigemForward}]\n${textoMensagem}`;
+      console.log(`[Admin] Forward detectado, JID de origem: ${jidOrigemForward}`);
+    }
 
-  let resposta = null;
+    console.log(`[Admin] Mensagem recebida: ${textoParaAgente}`);
 
-  while (true) {
-    let resultado;
+    await digitando(remoteJid, 1500);
+
+    console.log('[Admin] Chamando processarMensagemAdmin...');
+    const resposta = await adminAgent.processarMensagemAdmin(textoParaAgente);
+    console.log('[Admin] Resposta recebida:', JSON.stringify(resposta));
+
+    if (resposta) {
+      const envio = await enviarTexto(remoteJid, resposta);
+      console.log('[Admin] Resultado do envio:', JSON.stringify(envio));
+    }
+
+  } catch (err) {
+    console.error('[Webhook] Erro no grupo admin:', err);
     try {
-      resultado = await client.messages.create({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 1024,
-        system: buildSystemPrompt(_foraHorario, _msgHorario),
-        tools: TOOLS,
-        messages: sessao.historico
-      });
-    } catch (errApi) {
-      // PROTEÇÃO CONTRA HISTÓRICO CORROMPIDO:
-      // Se a API recusar a requisição por erro de estrutura (ex: tool_use
-      // sem tool_result de uma sessão antiga/corrompida), reseta o
-      // histórico desse cliente e tenta novamente do zero, ao invés de
-      // travar a conversa pra sempre.
-      const ehErroEstrutura = errApi?.status === 400 &&
-        (errApi?.error?.error?.type === 'invalid_request_error' || errApi?.error?.type === 'invalid_request_error');
-
-      if (ehErroEstrutura && sessao.historico.length > 1) {
-        console.error(`[Agente] Histórico corrompido para ${clienteNumero}, resetando sessão. Erro:`, errApi?.message || errApi);
-        sessao.historico = [{ role: 'user', content: mensagemTexto }];
-        continue;
-      }
-
-      // CRÉDITOS ESGOTADOS: erro 400 (invalid_request_error sobre billing)
-      // ou 403/429 dependendo de como a Anthropic sinaliza saldo zerado.
-      const errType = errApi?.error?.error?.type || errApi?.error?.type || '';
-      const errMsg  = (errApi?.error?.error?.message || errApi?.message || '').toLowerCase();
-      const ehSemCredito =
-        errType === 'invalid_request_error' && /credit|balance|billing/.test(errMsg) ||
-        errApi?.status === 403 && /credit|balance/.test(errMsg);
-
-      if (ehSemCredito) {
-        console.error('[Agente] CRÉDITOS ESGOTADOS na Anthropic:', errMsg);
-        await dispararAlertaCritico(
-          'creditos_anthropic',
-          'Créditos da Anthropic esgotados!',
-          'O agente parou de responder porque os créditos da conta Anthropic acabaram. Acessa console.anthropic.com e recarrega pra voltar a funcionar.'
-        );
-      }
-
-      console.error('[Agente] Erro irrecuperável na API:', errApi);
-      throw errApi;
-    }
-
-    if (resultado.stop_reason === 'tool_use') {
-      sessao.historico.push({ role: 'assistant', content: resultado.content });
-
-      const toolResults = [];
-      for (const bloco of resultado.content) {
-        if (bloco.type === 'tool_use') {
-          // CRÍTICO: nunca deixar um tool_use sem tool_result correspondente,
-          // mesmo se a ferramenta lançar erro — senão corrompe o histórico
-          // pra sempre (a API passa a rejeitar TODAS as mensagens futuras
-          // dessa sessão com "tool_use ids found without tool_result").
-          let conteudoResultado;
-          try {
-            const saida = await executarFerramenta(bloco.name, bloco.input, sessao, clienteNumero);
-            conteudoResultado = JSON.stringify(saida.resultado);
-          } catch (errFerramenta) {
-            console.error(`[Tool] Erro ao executar ${bloco.name}:`, errFerramenta);
-            conteudoResultado = JSON.stringify({
-              erro: true,
-              mensagem: 'Erro interno ao executar a ferramenta. Acionar Luiz humano se necessário.'
-            });
-          }
-
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: bloco.id,
-            content: conteudoResultado
-          });
-        }
-      }
-
-      sessao.historico.push({ role: 'user', content: toolResults });
-      continue;
-    }
-
-    resposta = resultado.content
-      .filter(b => b.type === 'text')
-      .map(b => b.text)
-      .join('\n')
-      .trim();
-
-    sessao.historico.push({ role: 'assistant', content: resposta });
-    break;
+      await enviarTexto(remoteJid, '⚠️ Deu erro ao processar isso aqui, tenta de novo ou me chama.');
+    } catch (_) {}
   }
-
-  return resposta || null;
 }
 
-module.exports = { processarMensagem, getSessao };
+// ── Extrai o JID de origem de uma mensagem encaminhada ─────────
+// A Evolution API (baseada no Baileys) traz isso em contextInfo,
+// que pode estar em diferentes tipos de mensagem (texto, imagem, etc).
+function extrairJidForward(mensagem) {
+  const msg = mensagem?.message;
+  if (!msg) return null;
+
+  // contextInfo pode estar em qualquer um dos tipos de mensagem
+  const contextInfo =
+    msg?.extendedTextMessage?.contextInfo ||
+    msg?.conversation?.contextInfo ||
+    msg?.imageMessage?.contextInfo ||
+    msg?.videoMessage?.contextInfo ||
+    msg?.audioMessage?.contextInfo ||
+    msg?.documentMessage?.contextInfo ||
+    msg?.messageContextInfo ||
+    null;
+
+  if (!contextInfo) return null;
+
+  // isForwarded indica que foi encaminhada; remoteJid/participant do
+  // contextInfo aponta pro chat de origem em alguns formatos da Evolution
+  const ehForward = contextInfo?.isForwarded || (contextInfo?.forwardingScore || 0) > 0;
+  if (!ehForward) return null;
+
+  return contextInfo?.remoteJid || contextInfo?.participant || null;
+}
+
+// ── Extrator de texto ─────────────────────────────────────────
+async function extrairTexto(mensagem) {
+  if (mensagem?.message?.conversation) {
+    return mensagem.message.conversation;
+  }
+  if (mensagem?.message?.extendedTextMessage?.text) {
+    return mensagem.message.extendedTextMessage.text;
+  }
+
+  // ── Áudio: transcreve com Whisper antes de seguir ─────────
+  if (mensagem?.message?.audioMessage) {
+    const audioMsg  = mensagem.message.audioMessage;
+    const mimetype  = audioMsg?.mimetype || 'audio/ogg';
+    let transcricao = null;
+
+    // Caso 1: Webhook Base64 ligado — o áudio vem direto em base64
+    const base64Audio = mensagem?.message?.base64 || audioMsg?.base64 || mensagem?.base64;
+    if (base64Audio) {
+      transcricao = await transcreverAudioBase64(base64Audio, mimetype);
+    }
+    // Caso 2: vem como URL
+    else if (audioMsg?.url) {
+      transcricao = await transcreverAudioUrl(audioMsg.url);
+    }
+
+    if (transcricao) {
+      console.log('[Transcricao] Áudio transcrito:', transcricao);
+      return `[ÁUDIO TRANSCRITO]: ${transcricao}`;
+    }
+    return '[ÁUDIO ENVIADO — não foi possível transcrever]';
+  }
+
+  if (mensagem?.message?.imageMessage) {
+    const caption = mensagem.message.imageMessage?.caption || '';
+    return caption ? `[IMAGEM ENVIADA] ${caption}` : '[COMPROVANTE DE PAGAMENTO ENVIADO]';
+  }
+  if (mensagem?.message?.documentMessage) {
+    const fileName = mensagem.message.documentMessage?.fileName || '';
+    if (fileName.endsWith('.vcf')) return '[ARQUIVO VCF DE CONTATOS]';
+    return '[DOCUMENTO ENVIADO]';
+  }
+  return '';
+}
+
+// ── Comandos do dono ──────────────────────────────────────────
+async function handleComandosDono(texto, remoteJid) {
+  const t = texto.toUpperCase();
+
+  if (t.startsWith('CLIENTE ADD:')) {
+    const novoNumero = texto.split(':')[1]?.trim();
+    if (novoNumero) {
+      const r = adicionarContato(novoNumero);
+      await enviarTexto(remoteJid,
+        r.novo ? `✅ Número ${r.numero} adicionado!` : `⚠️ Número ${r.numero} já estava na lista.`
+      );
+    }
+    return true;
+  }
+
+  if (t.startsWith('CLIENTE REMOVE:')) {
+    const numRemover = texto.split(':')[1]?.trim();
+    if (numRemover) {
+      const r = removerContato(numRemover);
+      await enviarTexto(remoteJid, r.ok ? `✅ Número ${r.numero} removido!` : `⚠️ ${r.erro}`);
+    }
+    return true;
+  }
+
+  if (t.startsWith('APELIDO ADD:')) {
+    const partes = texto.slice('APELIDO ADD:'.length).split('|');
+    const nomeProduto = partes[0]?.trim();
+    const apelidosStr = partes[1]?.trim();
+    if (nomeProduto && apelidosStr) {
+      const r = adicionarApelidos(nomeProduto, apelidosStr);
+      await enviarTexto(remoteJid,
+        `✅ Apelidos de *${r.produto}* atualizados!\n📝 Apelidos: ${r.apelidos.join(', ')}`
+      );
+    } else {
+      await enviarTexto(remoteJid, '⚠️ Formato:\nAPELIDO ADD: nome do produto | apelido1, apelido2');
+    }
+    return true;
+  }
+
+  if (t.startsWith('APELIDO REMOVE:')) {
+    const partes = texto.slice('APELIDO REMOVE:'.length).split('|');
+    const nomeProduto = partes[0]?.trim();
+    const apelidosStr = partes[1]?.trim();
+    if (nomeProduto && apelidosStr) {
+      const r = removerApelidos(nomeProduto, apelidosStr);
+      await enviarTexto(remoteJid,
+        r.ok
+          ? `✅ ${r.removidos} apelido(s) removido(s) de *${r.produto}*.\nRestantes: ${r.apelidos.join(', ') || 'nenhum'}`
+          : `⚠️ ${r.erro}`
+      );
+    } else {
+      await enviarTexto(remoteJid, '⚠️ Formato:\nAPELIDO REMOVE: nome do produto | apelido1, apelido2');
+    }
+    return true;
+  }
+
+  if (t.startsWith('APELIDO VER')) {
+    const nomeProduto = texto.slice('APELIDO VER'.length).replace(/^:\s*/, '').trim();
+    if (nomeProduto) {
+      const r = verApelidos(nomeProduto);
+      await enviarTexto(remoteJid,
+        r.apelidos.length > 0
+          ? `📝 *${r.produto}*\nApelidos: ${r.apelidos.join(', ')}`
+          : `ℹ️ *${r.produto}* não tem apelidos cadastrados.`
+      );
+    } else {
+      const todos = listarTodosApelidos();
+      if (todos.length === 0) {
+        await enviarTexto(remoteJid, 'ℹ️ Nenhum apelido cadastrado ainda.');
+      } else {
+        const lista = todos.map(e => `• *${e.nomeOriginal}*: ${e.apelidos.join(', ')}`).join('\n');
+        await enviarTexto(remoteJid, `📋 *Apelidos cadastrados:*\n\n${lista}`);
+      }
+    }
+    return true;
+  }
+
+  if (t.startsWith('REVENDEDOR ADD:')) {
+    const partes = texto.slice('REVENDEDOR ADD:'.length).split('|');
+    const jid  = partes[0]?.trim();
+    const nome = partes[1]?.trim();
+    if (jid && nome) {
+      GRUPOS_REVENDEDORES[jid] = nome;
+      await enviarTexto(remoteJid, `✅ Grupo *${nome}* adicionado como revendedor!`);
+    } else {
+      await enviarTexto(remoteJid, '⚠️ Formato:\nREVENDEDOR ADD: jid@g.us | Nome');
+    }
+    return true;
+  }
+
+  if (t.startsWith('REVENDEDOR VER')) {
+    const lista = Object.entries(GRUPOS_REVENDEDORES)
+      .map(([jid, nome]) => `• *${nome}*: ${jid}`)
+      .join('\n');
+    await enviarTexto(remoteJid, `📋 *Grupos de revendedores:*\n\n${lista}`);
+    return true;
+  }
+
+  if (t.startsWith('BLOQUEAR ADD:')) {
+    const novoNumero = texto.split(':')[1]?.trim();
+    if (novoNumero) {
+      const n = limparNumero(novoNumero);
+      NUMEROS_BLOQUEADOS.add(n);
+      await enviarTexto(remoteJid, `🚫 Número ${n} adicionado à lista de bloqueio. O agente não vai mais responder ele.`);
+    } else {
+      await enviarTexto(remoteJid, '⚠️ Formato:\nBLOQUEAR ADD: 5521999999999');
+    }
+    return true;
+  }
+
+  if (t.startsWith('BLOQUEAR REMOVE:')) {
+    const numRemover = texto.split(':')[1]?.trim();
+    if (numRemover) {
+      const n = limparNumero(numRemover);
+      const existia = NUMEROS_BLOQUEADOS.delete(n);
+      await enviarTexto(remoteJid,
+        existia ? `✅ Número ${n} removido da lista de bloqueio.` : `⚠️ Número ${n} não estava bloqueado.`
+      );
+    } else {
+      await enviarTexto(remoteJid, '⚠️ Formato:\nBLOQUEAR REMOVE: 5521999999999');
+    }
+    return true;
+  }
+
+  if (t.startsWith('BLOQUEAR VER')) {
+    const lista = Array.from(NUMEROS_BLOQUEADOS).map(n => `• ${n}`).join('\n');
+    await enviarTexto(remoteJid, `🚫 *Números bloqueados:*\n\n${lista || 'Nenhum.'}`);
+    return true;
+  }
+
+  if (t.startsWith('GRUPO BLOQUEAR ADD:')) {
+    const jid = texto.split(':')[1]?.trim();
+    if (jid) {
+      GRUPOS_BLOQUEADOS.add(jid);
+      GRUPOS_REVENDEDORES[jid] && delete GRUPOS_REVENDEDORES[jid];
+      await enviarTexto(remoteJid, `🚫 Grupo ${jid} adicionado à lista de bloqueio. Agente nunca vai responder nele.`);
+    } else {
+      await enviarTexto(remoteJid, '⚠️ Formato:\nGRUPO BLOQUEAR ADD: 120363xxxxxx@g.us');
+    }
+    return true;
+  }
+
+  if (t.startsWith('GRUPO BLOQUEAR VER')) {
+    const lista = Array.from(GRUPOS_BLOQUEADOS).map(j => `• ${j}`).join('\n');
+    await enviarTexto(remoteJid, `🚫 *Grupos bloqueados:*\n\n${lista || 'Nenhum.'}`);
+    return true;
+  }
+
+  return false;
+}
+
+module.exports = { handleWebhook, registrarPedidoDespachado };
