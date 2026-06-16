@@ -359,7 +359,7 @@ FRETE E ENTREGA:
 - Entrega em qualquer lugar — bairros fixos e Correios
 - Bairros com frete fixo: calculado automaticamente
 - Bairros fora da lista: fala "só um minuto que já coto!" e aciona o Luiz humano (sem explicar que é fora da zona)
-- Correios: quando cliente perguntar, fala "Envio sim! Me passa o CEP que já coto pra você 😄" e aciona o Luiz humano
+- Correios: quando cliente perguntar, fala "Envio sim! Me passa o CEP que já coto pra você 😄" e usa a ferramenta cotar_correios com o CEP do cliente
 - Nunca mencionar "zona fixa", "fora da área" ou similares — sempre positivo
 
 PAGAMENTO:
@@ -471,6 +471,18 @@ const TOOLS = [
     }
   },
   {
+    name: 'cotar_correios',
+    description: 'Cota o frete pelos Correios (PAC e SEDEX) a partir do CEP do cliente. CEP de origem: Copacabana (22020-000).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        cepDestino: { type: 'string', description: 'CEP do cliente (só números)' },
+        pesoGramas: { type: 'number', description: 'Peso do pedido em gramas (padrão 300g por frasco)' }
+      },
+      required: ['cepDestino']
+    }
+  },
+  {
     name: 'acionar_luiz_humano',
     description: 'Aciona o Luiz humano para situações que precisam de intervenção manual (frete desconhecido, desconto especial, etc). Envia notificação pro grupo admin.',
     input_schema: {
@@ -564,6 +576,45 @@ async function executarFerramenta(nome, input, sessao, clienteNumero) {
         return { resultado: { frete: null, precisaAcionarLuiz: true, mensagem: 'Bairro fora da zona de frete fixo. Acionar Luiz humano para cotar.' } };
       }
       return { resultado: { frete, endereco: input.endereco } };
+    }
+
+    case 'cotar_correios': {
+      const cepOrigem = '22020000';
+      const cepDestino = input.cepDestino.replace(/\D/g, '');
+      const peso = input.pesoGramas || 300;
+
+      try {
+        // PAC = 04669, SEDEX = 40010
+        const servicos = ['04669', '40010'];
+        const resultados = [];
+
+        for (const servico of servicos) {
+          const url = `http://ws.correios.com.br/calculador/CalcPrecoPrazo.asmx/CalcPrecoPrazo?nCdEmpresa=&sDsSenha=&nCdServico=${servico}&sCepOrigem=${cepOrigem}&sCepDestino=${cepDestino}&nVlPeso=${peso/1000}&nCdFormato=1&nVlComprimento=16&nVlAltura=12&nVlLargura=14&sCdMaoPropria=n&nVlValorDeclarado=0&sCdAvisoRecebimento=n&StrRetorno=xml&nIndicaCalculo=3`;
+          
+          const res = await fetch(url);
+          const xml = await res.text();
+          
+          const valorMatch = xml.match(/<Valor>(.*?)<\/Valor>/);
+          const prazoMatch = xml.match(/<PrazoEntrega>(.*?)<\/PrazoEntrega>/);
+          const erroMatch  = xml.match(/<MsgErro>(.*?)<\/MsgErro>/);
+          
+          if (valorMatch && prazoMatch && !erroMatch?.[1]) {
+            const nome = servico === '40010' ? 'SEDEX' : 'PAC';
+            const valor = valorMatch[1].replace(',', '.');
+            const prazo = prazoMatch[1];
+            resultados.push({ servico: nome, valor: parseFloat(valor), prazo: `${prazo} dias úteis` });
+          }
+        }
+
+        if (resultados.length === 0) {
+          return { resultado: { ok: false, erro: 'Não foi possível cotar. Acionar Luiz humano.' } };
+        }
+
+        return { resultado: { ok: true, opcoes: resultados } };
+
+      } catch (err) {
+        return { resultado: { ok: false, erro: 'Erro ao consultar Correios. Acionar Luiz humano.' } };
+      }
     }
 
     case 'acionar_luiz_humano': {
