@@ -5,6 +5,36 @@ const { enviarTexto } = require('../webhook/evolution');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+// ── Alerta crítico (créditos esgotados, falhas graves) ────────
+// Dispara notificação ntfy + mensagem no grupo admin. Tem um cooldown
+// simples pra não espamar o Luiz com a mesma falha repetida a cada msg.
+const _ultimoAlerta = {};
+async function dispararAlertaCritico(chave, titulo, mensagem) {
+  const agora = Date.now();
+  const cooldownMs = 10 * 60 * 1000; // 10 minutos entre alertas iguais
+  if (_ultimoAlerta[chave] && (agora - _ultimoAlerta[chave]) < cooldownMs) return;
+  _ultimoAlerta[chave] = agora;
+
+  const ntfyTopic = process.env.NTFY_TOPIC;
+  if (ntfyTopic) {
+    try {
+      await fetch(`https://ntfy.sh/${ntfyTopic}`, {
+        method: 'POST',
+        headers: { 'Title': titulo, 'Priority': 'urgent', 'Tags': 'warning' },
+        body: mensagem
+      });
+    } catch (_) {}
+  }
+
+  const grupoAdmin = process.env.ADMIN_GROUP_JID;
+  if (grupoAdmin) {
+    try {
+      const { enviarTexto } = require('../webhook/evolution');
+      await enviarTexto(grupoAdmin, `🚨 *${titulo}*\n\n${mensagem}`);
+    } catch (_) {}
+  }
+}
+
 const sessoes = new Map();
 
 function getSessao(numero) {
@@ -789,6 +819,23 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
         console.error(`[Agente] Histórico corrompido para ${clienteNumero}, resetando sessão. Erro:`, errApi?.message || errApi);
         sessao.historico = [{ role: 'user', content: mensagemTexto }];
         continue;
+      }
+
+      // CRÉDITOS ESGOTADOS: erro 400 (invalid_request_error sobre billing)
+      // ou 403/429 dependendo de como a Anthropic sinaliza saldo zerado.
+      const errType = errApi?.error?.error?.type || errApi?.error?.type || '';
+      const errMsg  = (errApi?.error?.error?.message || errApi?.message || '').toLowerCase();
+      const ehSemCredito =
+        errType === 'invalid_request_error' && /credit|balance|billing/.test(errMsg) ||
+        errApi?.status === 403 && /credit|balance/.test(errMsg);
+
+      if (ehSemCredito) {
+        console.error('[Agente] CRÉDITOS ESGOTADOS na Anthropic:', errMsg);
+        await dispararAlertaCritico(
+          'creditos_anthropic',
+          'Créditos da Anthropic esgotados!',
+          'O agente parou de responder porque os créditos da conta Anthropic acabaram. Acessa console.anthropic.com e recarrega pra voltar a funcionar.'
+        );
       }
 
       console.error('[Agente] Erro irrecuperável na API:', errApi);
