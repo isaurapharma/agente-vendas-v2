@@ -105,10 +105,10 @@ async function handleWebhook(req, res) {
     }
 
     // ── Verifica se número é autorizado ───────────────────────
-    if (!isAutorizado(numero)) {
-      console.log(`[Webhook] Número não autorizado: ${numero} — ignorado.`);
-      return;
-    }
+    //if (!isAutorizado(numero)) {
+     // console.log(`[Webhook] Número não autorizado: ${numero} — ignorado.`);
+     // return;
+    //}
 
     // ── Marca como lida e simula digitando ────────────────────
     if (mensagem?.key?.id) {
