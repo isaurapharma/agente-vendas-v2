@@ -5,6 +5,7 @@ const { processarMensagem, getSessao } = require('../agent/agente');
 const { enviarTexto, marcarComoLida, digitando } = require('./evolution');
 const { isAutorizado, adicionarContato, removerContato } = require('../stock/contatos');
 const { adicionarApelidos, removerApelidos, verApelidos, listarTodosApelidos } = require('../stock/apelidos');
+const { transcreverAudioBase64, transcreverAudioUrl } = require('./transcricao');
 
 const OWNER        = process.env.OWNER_NUMBER;
 const DELIVERY_JID = process.env.DELIVERY_GROUP_JID;
@@ -145,7 +146,7 @@ async function handleWebhook(req, res) {
       return;
     }
 
-    let textoMensagem = extrairTexto(mensagem);
+    let textoMensagem = await extrairTexto(mensagem);
     console.log('[Debug] Texto extraído:', JSON.stringify(textoMensagem));
 
     if (!textoMensagem) {
@@ -263,7 +264,7 @@ async function handleGrupoRevendedor(mensagem, remoteJid, data) {
     if (mensagem?.key?.fromMe) return;
 
     const pushName      = mensagem?.pushName || data?.pushName || 'revendedor';
-    const textoMensagem = extrairTexto(mensagem);
+    const textoMensagem = await extrairTexto(mensagem);
     if (!textoMensagem) return;
 
     const nomeRev = nomeRevendedor(remoteJid);
@@ -282,13 +283,37 @@ async function handleGrupoRevendedor(mensagem, remoteJid, data) {
 }
 
 // ── Extrator de texto ─────────────────────────────────────────
-function extrairTexto(mensagem) {
+async function extrairTexto(mensagem) {
   if (mensagem?.message?.conversation) {
     return mensagem.message.conversation;
   }
   if (mensagem?.message?.extendedTextMessage?.text) {
     return mensagem.message.extendedTextMessage.text;
   }
+
+  // ── Áudio: transcreve com Whisper antes de seguir ─────────
+  if (mensagem?.message?.audioMessage) {
+    const audioMsg  = mensagem.message.audioMessage;
+    const mimetype  = audioMsg?.mimetype || 'audio/ogg';
+    let transcricao = null;
+
+    // Caso 1: Webhook Base64 ligado — o áudio vem direto em base64
+    const base64Audio = mensagem?.message?.base64 || audioMsg?.base64 || mensagem?.base64;
+    if (base64Audio) {
+      transcricao = await transcreverAudioBase64(base64Audio, mimetype);
+    }
+    // Caso 2: vem como URL
+    else if (audioMsg?.url) {
+      transcricao = await transcreverAudioUrl(audioMsg.url);
+    }
+
+    if (transcricao) {
+      console.log('[Transcricao] Áudio transcrito:', transcricao);
+      return `[ÁUDIO TRANSCRITO]: ${transcricao}`;
+    }
+    return '[ÁUDIO ENVIADO — não foi possível transcrever]';
+  }
+
   if (mensagem?.message?.imageMessage) {
     const caption = mensagem.message.imageMessage?.caption || '';
     return caption ? `[IMAGEM ENVIADA] ${caption}` : '[COMPROVANTE DE PAGAMENTO ENVIADO]';
