@@ -151,6 +151,16 @@ async function handleWebhook(req, res) {
 
   } catch (err) {
     console.error('[Webhook] Erro não tratado:', err);
+    // Garante que o cliente nunca fique sem nenhuma resposta por erro interno
+    try {
+      const body = req.body;
+      const data = body?.data;
+      const mensagem = data?.key ? data : (data?.messages?.[0] || null);
+      const remoteJid = mensagem?.key?.remoteJid;
+      if (remoteJid && !remoteJid.endsWith('@g.us')) {
+        await enviarTexto(remoteJid, 'opa, deu um perrengue aqui rapidinho! já volto 🙏');
+      }
+    } catch (_) {}
   }
 }
 
