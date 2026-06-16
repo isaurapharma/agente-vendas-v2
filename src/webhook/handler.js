@@ -133,6 +133,9 @@ async function handleWebhook(req, res) {
       return;
     }
 
+    // 🎯 MARCADOR EXCLUSIVO: mostra o tipo exato da mensagem recebida
+    console.log('[TIPO_MSG]', mensagem?.messageType || Object.keys(mensagem?.message || {}).join(','));
+
     const remoteJid = mensagem?.key?.remoteJid || data?.remoteJid;
     if (!remoteJid) {
       console.log('[Debug] remoteJid não encontrado');
