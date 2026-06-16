@@ -3,9 +3,9 @@
 
 const axios = require('axios');
 
-const BASE  = process.env.EVOLUTION_API_URL;
-const KEY   = process.env.EVOLUTION_API_KEY;
-const INST  = process.env.EVOLUTION_INSTANCE;
+const BASE = process.env.EVOLUTION_API_URL;
+const KEY  = process.env.EVOLUTION_API_KEY;
+const INST = process.env.EVOLUTION_INSTANCE;
 
 const api = axios.create({
   baseURL: `${BASE}/message`,
@@ -16,25 +16,23 @@ const api = axios.create({
   timeout: 15000
 });
 
-// ─────────────────────────────────────────────
-// Enviar texto simples
-// ─────────────────────────────────────────────
+// ── Enviar texto simples ──────────────────────────────────────
+// Retorna { ok, messageId, data } para rastrear pedidos despachados
 async function enviarTexto(para, texto) {
   try {
     const res = await api.post(`/sendText/${INST}`, {
       number: para,
       text: texto
     });
-    return { ok: true, data: res.data };
+    const messageId = res.data?.key?.id || res.data?.messageId || null;
+    return { ok: true, messageId, data: res.data };
   } catch (err) {
     console.error('[Evolution] Erro ao enviar texto:', err?.response?.data || err.message);
     return { ok: false, erro: err.message };
   }
 }
 
-// ─────────────────────────────────────────────
-// Enviar imagem com legenda
-// ─────────────────────────────────────────────
+// ── Enviar imagem com legenda ─────────────────────────────────
 async function enviarImagem(para, urlOuBase64, legenda = '') {
   try {
     const payload = urlOuBase64.startsWith('http')
@@ -49,9 +47,7 @@ async function enviarImagem(para, urlOuBase64, legenda = '') {
   }
 }
 
-// ─────────────────────────────────────────────
-// Marcar mensagem como lida (typing indicator)
-// ─────────────────────────────────────────────
+// ── Marcar mensagem como lida ─────────────────────────────────
 async function marcarComoLida(remoteJid, messageId) {
   try {
     await axios.post(`${BASE}/chat/markMessageAsRead/${INST}`, {
@@ -59,14 +55,10 @@ async function marcarComoLida(remoteJid, messageId) {
     }, {
       headers: { 'apikey': KEY }
     });
-  } catch (_) {
-    // Não crítico, ignora silenciosamente
-  }
+  } catch (_) {}
 }
 
-// ─────────────────────────────────────────────
-// Simular "digitando..."
-// ─────────────────────────────────────────────
+// ── Simular "digitando..." ────────────────────────────────────
 async function digitando(remoteJid, duracaoMs = 2000) {
   try {
     await axios.post(`${BASE}/chat/sendPresence/${INST}`, {
@@ -75,9 +67,7 @@ async function digitando(remoteJid, duracaoMs = 2000) {
     }, {
       headers: { 'apikey': KEY }
     });
-  } catch (_) {
-    // Não crítico
-  }
+  } catch (_) {}
 }
 
 module.exports = { enviarTexto, enviarImagem, marcarComoLida, digitando };
