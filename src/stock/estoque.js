@@ -6,7 +6,10 @@ const path = require('path');
 const fs   = require('fs');
 const { resolverApelido } = require('./apelidos');
 
-const FILE = path.resolve(process.env.STOCK_FILE_PATH || './data/estoque.xlsx');
+function getFilePath() {
+  return path.resolve(process.env.STOCK_FILE_PATH || './data/estoque.xlsx');
+}
+
 const SHEET = 'Estoque';
 
 // ─────────────────────────────────────────────
@@ -14,7 +17,9 @@ const SHEET = 'Estoque';
 // ─────────────────────────────────────────────
 
 function lerPlanilha() {
+  const FILE = getFilePath();
   if (!fs.existsSync(FILE)) {
+    console.error(`[Estoque] Arquivo não encontrado em: ${FILE} | STOCK_FILE_PATH=${process.env.STOCK_FILE_PATH}`);
     throw new Error(`Arquivo de estoque não encontrado: ${FILE}. Rode: node scripts/criar-estoque.js`);
   }
   const wb = XLSX.readFile(FILE);
@@ -30,7 +35,7 @@ function salvarPlanilha(wb, dados) {
   });
   ws['!cols'] = [{ wch: 8 }, { wch: 30 }, { wch: 12 }, { wch: 10 }, { wch: 8 }];
   wb.Sheets[SHEET] = ws;
-  XLSX.writeFile(wb, FILE);
+  XLSX.writeFile(wb, getFilePath());
 }
 
 // Normaliza texto para busca (sem acento, minúsculo)
