@@ -381,7 +381,7 @@ PERSONALIDADE:
 - Nunca expõe a própria mecânica interna pro cliente (não diz "vi no catálogo", "no meu sistema tem", "deixa eu checar minha lista" — fala como se simplesmente soubesse, naturalmente)
 - "vc é fechamento" só com clientes conhecidos
 - IDENTIDADE: se o cliente perguntar, estranhar, ou suspeitar que está falando com IA/robô/outra pessoa: responde que é o assistente do Luiz. Nunca nega ser um assistente, mas também nunca afirma tecnicamente "sou uma inteligência artificial" — fala de forma natural, como "sou o assistente dele aqui" ou similar.
-- EMOJIS: pode usar emoji ocasionalmente pra dar leveza, mas SEM repetir o mesmo emoji em quase toda mensagem da conversa. Varia os emojis e usa com moderação — não precisa ter emoji em toda frase.
+- EMOJIS: o Luiz é homem, e usa emoji com função, não por hábito. NUNCA usa carinha sorridente (😄😊🙂) ou emojis de "fofura"/felicidade genérica — isso não é como homem fala. Usa emoji só quando ele representa algo concreto na frase: motoboy saindo pra entrega (🛵), endereço/casa (🏠), brincadeira tipo "saiu o foguete" (🚀), dinheiro fechado (💰), alguma risada genuína de algo engraçado que o cliente falou (aí pode um 😂 ou 🤣 pontual, nunca repetido). Na duvida, não usa emoji nenhum — é melhor a mensagem ficar seca do que ter emoji forçado ou fora de contexto.
 
 CONHECIMENTO:
 - Expert em hormônios, suplementos e peptídeos
@@ -824,15 +824,17 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
 async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cliente') {
   const sessao = getSessao(clienteNumero);
 
-  // Se Luiz humano interveio, aguarda 15min após última msg do cliente
+  // Se Luiz humano interveio manualmente, aguarda 3min desde a ÚLTIMA
+  // mensagem que ELE mandou (não desde a mensagem do cliente) antes de
+  // a IA retomar a conversa automaticamente.
   if (sessao.luizHumanoAtivo) {
     const agora = Date.now();
-    const quinzeMin = 15 * 60 * 1000;
-    sessao.luizHumanoUltimaMsg = agora;
-    if (agora - sessao.luizHumanoUltimaMsg < quinzeMin) {
-      return null; // não responde
+    const tresMin = 3 * 60 * 1000;
+    const tempoDesdeUltimaMsgLuiz = agora - (sessao.luizHumanoUltimaMsg || agora);
+    if (tempoDesdeUltimaMsgLuiz < tresMin) {
+      return null; // Luiz humano ainda dentro da janela de atendimento manual, IA não responde
     }
-    // Passou 15min, retoma
+    // Passou 3min sem o Luiz mandar nada novo, retoma automaticamente
     sessao.luizHumanoAtivo = false;
     sessao.luizHumanoUltimaMsg = null;
   }
@@ -962,4 +964,14 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
   return resposta || null;
 }
 
-module.exports = { processarMensagem, getSessao };
+// Chamado pelo handler.js quando detecta uma mensagem fromMe que NÃO foi
+// enviada pela própria IA (ou seja, o Luiz humano digitou manualmente do
+// WhatsApp dele direto pro cliente). Ativa/renova a pausa de 3 minutos.
+function registrarMensagemHumana(clienteNumero) {
+  const sessao = getSessao(clienteNumero);
+  sessao.luizHumanoAtivo = true;
+  sessao.luizHumanoUltimaMsg = Date.now();
+  console.log(`[Agente] Luiz humano respondeu manualmente para ${clienteNumero}, pausando IA por 3min.`);
+}
+
+module.exports = { processarMensagem, getSessao, registrarMensagemHumana };
