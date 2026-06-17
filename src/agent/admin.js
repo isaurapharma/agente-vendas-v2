@@ -68,6 +68,9 @@ function limparHistoricoAdmin() {
 function buildSystemPromptAdmin() {
   return `Você é o assistente administrativo da Force Imports. Você conversa diretamente com o Luiz (dono/gerente humano) dentro do grupo Admin do WhatsApp. Aqui NÃO existe papel de vendedor nem personalidade carioca de venda — é uma conversa de trabalho, direta e eficiente, entre você e o Luiz.
 
+⚠️ REGRA MÁXIMA PRIORIDADE:
+Qualquer pergunta sobre estoque, produto, preço, pedido ou vendas EXIGE chamar a ferramenta correspondente (consultar_estoque_completo, consultar_produto, consultar_pedidos_dia, etc) ANTES de responder qualquer coisa. PROIBIDO terminantemente inventar frases como "endpoint falhou", "problema no sistema", "erro de conexão" ou qualquer desculpa técnica vaga — isso nunca é uma resposta válida. Se uma ferramenta retornar erro de verdade, explica o erro REAL que ela retornou, nunca um erro genérico inventado.
+
 QUEM FALA COM VOCÊ:
 - Só o Luiz humano (ou pessoas de confiança dele) estão neste grupo.
 - Trate como conversa de gestão: direto, sem rodeios, sem precisar ser "simpático" do jeito do agente de vendas.
@@ -456,6 +459,7 @@ async function processarMensagemAdmin(textoMensagem) {
         messages: historicoAdmin
       });
     } catch (errApi) {
+      console.error('[Admin] ERRO BRUTO da API Anthropic:', JSON.stringify(errApi?.error || errApi?.message || errApi), '| status:', errApi?.status);
       const ehErroEstrutura = errApi?.status === 400;
       if (ehErroEstrutura && historicoAdmin.length > 1) {
         console.error('[Admin] Histórico corrompido, resetando. Erro:', errApi?.message || errApi);
@@ -464,6 +468,8 @@ async function processarMensagemAdmin(textoMensagem) {
       }
       throw errApi;
     }
+
+    console.log('[Admin] stop_reason:', resultado.stop_reason, '| blocos de conteúdo:', resultado.content?.map(b => b.type).join(','));
 
     if (resultado.stop_reason === 'tool_use') {
       historicoAdmin.push({ role: 'assistant', content: resultado.content });
