@@ -119,6 +119,17 @@ module.exports = {
 // ── Ferramentas do agente administrativo ──────────────────────
 const TOOLS_ADMIN = [
   {
+    name: 'atualizar_mes_planilha',
+    description: 'Atualiza qual aba/mês da planilha de estoque o sistema deve usar para consultar produtos e quantidades. Use quando o Luiz humano avisar que mudou o mês ou que a aba mudou (ex: "atualiza que estamos em junho", "agora é a aba de julho").',
+    input_schema: {
+      type: 'object',
+      properties: {
+        mes: { type: 'string', description: 'Nome do mês em português, minúsculo, exatamente como está escrito na aba da planilha (ex: "junho", "julho")' }
+      },
+      required: ['mes']
+    }
+  },
+  {
     name: 'bloquear_numero',
     description: 'Bloqueia um número de telefone — o agente de vendas nunca mais responde esse número.',
     input_schema: {
@@ -314,6 +325,11 @@ async function executarFerramentaAdmin(nome, input) {
 
   switch (nome) {
 
+    case 'atualizar_mes_planilha': {
+      const resultado = estoque.definirAbaAtiva(input.mes);
+      return { resultado };
+    }
+
     case 'bloquear_numero': {
       const n = limparNumeroAdmin(input.numero);
       _refs.numerosBloqueados?.add(n);
@@ -483,7 +499,13 @@ async function processarMensagemAdmin(textoMensagem) {
             conteudoResultado = JSON.stringify(saida.resultado);
           } catch (errFerramenta) {
             console.error(`[AdminTool] Erro ao executar ${bloco.name}:`, errFerramenta);
-            conteudoResultado = JSON.stringify({ erro: true, mensagem: 'Erro interno ao executar a ação.' });
+            // Passa o erro REAL pra IA poder comunicar com precisão,
+            // em vez de uma mensagem genérica que a IA acaba parafraseando
+            // de forma estranha (tipo "2 endpoints falharam").
+            conteudoResultado = JSON.stringify({
+              erro: true,
+              mensagem: `Erro real ao executar ${bloco.name}: ${errFerramenta.message || errFerramenta}`
+            });
           }
           toolResults.push({
             type: 'tool_result',
