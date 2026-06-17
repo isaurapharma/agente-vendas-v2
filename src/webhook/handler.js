@@ -1,7 +1,7 @@
 // src/webhook/handler.js
 // Recebe eventos da Evolution API e roteia para o agente
 
-const { processarMensagem, getSessao } = require('../agent/agente');
+const { processarMensagem, getSessao, registrarMensagemHumana } = require('../agent/agente');
 const { enviarTexto, marcarComoLida, digitando } = require('./evolution');
 const { isAutorizado, adicionarContato, removerContato } = require('../stock/contatos');
 const { adicionarApelidos, removerApelidos, verApelidos, listarTodosApelidos } = require('../stock/apelidos');
@@ -42,6 +42,21 @@ function ehBloqueado(numero) {
 
 // ── Mapa de pedidos despachados: messageId → clienteNumero ─────
 const pedidosDespachados = new Map();
+
+// ── IDs de mensagens enviadas pela própria IA ──────────────────
+// Usado para diferenciar mensagens automáticas (IA) de mensagens
+// manuais que o Luiz humano digita/grava direto do WhatsApp dele.
+// Quando uma msg fromMe chega e o ID NÃO está aqui, foi o Luiz humano.
+const idsEnviadosPelaIA = new Set();
+function registrarIdDaIA(messageId) {
+  if (!messageId) return;
+  idsEnviadosPelaIA.add(messageId);
+  // Limpeza simples pra não crescer pra sempre em memória
+  if (idsEnviadosPelaIA.size > 500) {
+    const primeiro = idsEnviadosPelaIA.values().next().value;
+    idsEnviadosPelaIA.delete(primeiro);
+  }
+}
 
 // ── Grupos de revendedores ─────────────────────────────────────
 const GRUPOS_REVENDEDORES = {
@@ -142,9 +157,37 @@ async function handleWebhook(req, res) {
       return;
     }
 
-    // Ignora mensagens do próprio bot
+    // Ignora mensagens do próprio bot — MAS diferencia: se o ID não é
+    // conhecido como tendo sido enviado pela IA, foi o Luiz humano
+    // digitando ou gravando áudio manualmente pro cliente.
     if (mensagem?.key?.fromMe) {
-      console.log('[Debug] Mensagem do próprio bot (fromMe), ignorando');
+      const idMsg = mensagem?.key?.id;
+      const foiAIA = idMsg && idsEnviadosPelaIA.has(idMsg);
+
+      if (foiAIA) {
+        console.log('[Debug] Mensagem da própria IA (fromMe), ignorando');
+        return;
+      }
+
+      // Não foi a IA — é o Luiz humano respondendo manualmente.
+      // Só processa se for conversa direta com cliente (não grupo).
+      if (!ehGrupo(remoteJid)) {
+        const numeroCliente = extrairNumero(remoteJid);
+        const textoLuiz = await extrairTexto(mensagem);
+        console.log(`[Humano] Luiz respondeu manualmente para ${numeroCliente}: ${textoLuiz}`);
+
+        registrarMensagemHumana(numeroCliente);
+
+        // Adiciona o que o Luiz humano disse ao histórico da sessão,
+        // pra quando a IA retomar depois dos 3min ela já saber o que
+        // ele falou (inclusive se foi áudio, já vem transcrito aqui).
+        if (textoLuiz) {
+          try {
+            const sessao = getSessao(numeroCliente);
+            sessao.historico.push({ role: 'assistant', content: `[Luiz humano respondeu manualmente]: ${textoLuiz}` });
+          } catch (_) {}
+        }
+      }
       return;
     }
 
@@ -216,6 +259,7 @@ async function handleWebhook(req, res) {
     if (resposta) {
       const envio = await enviarTexto(remoteJid, resposta);
       console.log('[Debug] Resultado do envio:', JSON.stringify(envio));
+      if (envio?.messageId) registrarIdDaIA(envio.messageId);
     }
 
   } catch (err) {
