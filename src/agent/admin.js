@@ -26,11 +26,42 @@ function registrarReferencias(refs) {
   _refs = { ..._refs, ...refs };
 }
 
-// ── Histórico de conversa do grupo admin (simples, em memória) ───
-let historicoAdmin = [];
+// ── Histórico de conversa do grupo admin (persistido em disco) ───
+const fs   = require('fs');
+const path = require('path');
+
+function getHistoricoAdminFilePath() {
+  return path.resolve(process.env.ADMIN_HISTORICO_FILE_PATH || './data/historico-admin.json');
+}
+
+function carregarHistoricoAdminDoDisco() {
+  try {
+    const arquivo = getHistoricoAdminFilePath();
+    if (!fs.existsSync(arquivo)) return [];
+    const raw = fs.readFileSync(arquivo, 'utf-8');
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error('[Admin] Erro ao carregar histórico do disco, começando do zero:', err.message);
+    return [];
+  }
+}
+
+function salvarHistoricoAdminNoDisco() {
+  try {
+    const arquivo = getHistoricoAdminFilePath();
+    const dir = path.dirname(arquivo);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(arquivo, JSON.stringify(historicoAdmin), 'utf-8');
+  } catch (err) {
+    console.error('[Admin] Erro ao salvar histórico no disco:', err.message);
+  }
+}
+
+let historicoAdmin = carregarHistoricoAdminDoDisco();
 
 function limparHistoricoAdmin() {
   historicoAdmin = [];
+  salvarHistoricoAdminNoDisco();
 }
 
 // ── System Prompt do agente administrativo ────────────────────
@@ -470,6 +501,7 @@ async function processarMensagemAdmin(textoMensagem) {
     break;
   }
 
+  salvarHistoricoAdminNoDisco();
   return resposta || null;
 }
 
