@@ -159,7 +159,7 @@ async function handleWebhook(req, res) {
 
     // Ignora mensagens do próprio bot — MAS diferencia: se o ID não é
     // conhecido como tendo sido enviado pela IA, foi o Luiz humano
-    // digitando ou gravando áudio manualmente pro cliente.
+    // digitando ou gravando áudio manualmente.
     if (mensagem?.key?.fromMe) {
       const idMsg = mensagem?.key?.id;
       const foiAIA = idMsg && idsEnviadosPelaIA.has(idMsg);
@@ -169,24 +169,35 @@ async function handleWebhook(req, res) {
         return;
       }
 
-      // Não foi a IA — é o Luiz humano respondendo manualmente.
-      // Só processa se for conversa direta com cliente (não grupo).
+      // Não foi a IA — foi o Luiz humano digitando manualmente.
+      const adminJidAtual = process.env.ADMIN_GROUP_JID;
+
+      // Caso 1: Luiz humano mandando mensagem manual NO GRUPO ADMIN —
+      // processa normalmente como uma conversa com o agente admin.
+      // EXCEÇÃO: se o texto bate com um padrão de aviso automático
+      // que o próprio sistema manda (ex: acionar_luiz_humano, alerta de
+      // crédito), ignora — evita reprocessar avisos automáticos como se
+      // fossem instrução manual do Luiz, caso o ID não tenha sido
+      // registrado a tempo por algum motivo.
+      if (ehGrupo(remoteJid) && remoteJid === adminJidAtual) {
+        const textoCheck = await extrairTexto(mensagem);
+        const ehAvisoAutomatico = /^🔔 \*Atenção Luiz!\*|^🚨 \*/.test(textoCheck || '');
+        if (ehAvisoAutomatico) {
+          console.log('[Admin] Mensagem fromMe bate padrão de aviso automático, ignorando (segurança extra).');
+          return;
+        }
+        console.log('[Admin] Mensagem manual do Luiz humano no grupo Admin, processando.');
+        await handleGrupoAdmin(mensagem, remoteJid);
+        return;
+      }
+
+      // Caso 2: Luiz humano respondendo manualmente direto pro cliente
+      // (fora do grupo Admin) — registra pausa de 3min no agente vendedor.
       if (!ehGrupo(remoteJid)) {
         const numeroCliente = extrairNumero(remoteJid);
         const textoLuiz = await extrairTexto(mensagem);
         console.log(`[Humano] Luiz respondeu manualmente para ${numeroCliente}: ${textoLuiz}`);
-
-        registrarMensagemHumana(numeroCliente);
-
-        // Adiciona o que o Luiz humano disse ao histórico da sessão,
-        // pra quando a IA retomar depois dos 3min ela já saber o que
-        // ele falou (inclusive se foi áudio, já vem transcrito aqui).
-        if (textoLuiz) {
-          try {
-            const sessao = getSessao(numeroCliente);
-            sessao.historico.push({ role: 'assistant', content: `[Luiz humano respondeu manualmente]: ${textoLuiz}` });
-          } catch (_) {}
-        }
+        registrarMensagemHumana(numeroCliente, textoLuiz);
       }
       return;
     }
@@ -361,14 +372,13 @@ async function handleGrupoRevendedor(mensagem, remoteJid, data) {
 }
 
 // ── Handler do grupo Admin: linguagem natural via agente IA ───
+// IMPORTANTE: o chamador (handleWebhook) já decide quando chamar essa
+// função, inclusive para mensagens fromMe=true do Luiz humano digitando
+// manualmente no grupo Admin — não verificamos fromMe aqui de novo,
+// senão cancelamos exatamente as mensagens manuais que queremos processar.
 async function handleGrupoAdmin(mensagem, remoteJid) {
   console.log('[Admin] handleGrupoAdmin chamado para remoteJid:', remoteJid);
   try {
-    if (mensagem?.key?.fromMe) {
-      console.log('[Admin] Mensagem do próprio bot, ignorando.');
-      return;
-    }
-
     const textoMensagem = await extrairTexto(mensagem);
     if (!textoMensagem) {
       console.log('[Admin] Texto vazio, abortando.');
@@ -397,6 +407,7 @@ async function handleGrupoAdmin(mensagem, remoteJid) {
     if (resposta) {
       const envio = await enviarTexto(remoteJid, resposta);
       console.log('[Admin] Resultado do envio:', JSON.stringify(envio));
+      if (envio?.messageId) registrarIdDaIA(envio.messageId);
     }
 
   } catch (err) {
