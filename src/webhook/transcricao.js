@@ -1,96 +1,953 @@
-// src/webhook/transcricao.js
-// Transcreve mensagens de áudio do WhatsApp usando a API Whisper da OpenAI
+// src/agent/agente.js
+const Anthropic = require('@anthropic-ai/sdk');
+const estoque   = require('../stock/estoque');
+const { enviarTexto } = require('../webhook/evolution');
 
-/**
- * Transcreve áudio a partir de base64 (formato ogg/opus do WhatsApp)
- * @param {string} base64Audio - áudio em base64 (sem prefixo data:)
- * @param {string} mimetype - tipo do áudio (ex: 'audio/ogg; codecs=opus')
- * @returns {Promise<string>} texto transcrito
- */
-async function transcreverAudioBase64(base64Audio, mimetype = 'audio/ogg') {
-  const OPENAI_KEY = process.env.OPENAI_API_KEY;
-  console.log('[Transcricao] Iniciando transcrição. Chave configurada?', !!OPENAI_KEY, '| Tamanho do base64:', base64Audio?.length);
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-  if (!OPENAI_KEY) {
-    console.error('[Transcricao] OPENAI_API_KEY não configurada.');
-    return null;
+// ── Alerta crítico (créditos esgotados, falhas graves) ────────
+// Dispara notificação ntfy + mensagem no grupo admin. Tem um cooldown
+// simples pra não espamar o Luiz com a mesma falha repetida a cada msg.
+const _ultimoAlerta = {};
+async function dispararAlertaCritico(chave, titulo, mensagem) {
+  const agora = Date.now();
+  const cooldownMs = 10 * 60 * 1000; // 10 minutos entre alertas iguais
+  if (_ultimoAlerta[chave] && (agora - _ultimoAlerta[chave]) < cooldownMs) return;
+  _ultimoAlerta[chave] = agora;
+
+  const ntfyTopic = process.env.NTFY_TOPIC;
+  if (ntfyTopic) {
+    try {
+      await fetch(`https://ntfy.sh/${ntfyTopic}`, {
+        method: 'POST',
+        headers: { 'Title': titulo, 'Priority': 'urgent', 'Tags': 'warning' },
+        body: mensagem
+      });
+    } catch (_) {}
   }
 
-  try {
-    const buffer = Buffer.from(base64Audio, 'base64');
-    const extensao = mimetype.includes('ogg') ? 'ogg' : 'mp3';
+  const grupoAdmin = process.env.ADMIN_GROUP_JID;
+  if (grupoAdmin) {
+    try {
+      const { enviarTexto } = require('../webhook/evolution');
+      await enviarTexto(grupoAdmin, `🚨 *${titulo}*\n\n${mensagem}`);
+    } catch (_) {}
+  }
+}
 
-    const formData = new FormData();
-    formData.append('file', new Blob([buffer], { type: mimetype }), `audio.${extensao}`);
-    formData.append('model', 'whisper-1');
-    formData.append('language', 'pt');
+const sessoes = new Map();
 
-    const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${OPENAI_KEY}`
-      },
-      body: formData
+function getSessao(numero) {
+  if (!sessoes.has(numero)) {
+    sessoes.set(numero, {
+      historico: [],
+      carrinho: [],
+      aguardandoPix: false,
+      pedidoPendente: null,
+      luizHumanoAtivo: false,
+      luizHumanoUltimaMsg: null,
+      endereco: null,
+      frete: null
     });
+  }
+  return sessoes.get(numero);
+}
 
-    if (!res.ok) {
-      const erro = await res.text();
-      console.error('[Transcricao] Erro Whisper:', res.status, erro);
+function limparCarrinho(numero) {
+  const s = getSessao(numero);
+  s.carrinho = [];
+  s.aguardandoPix = false;
+  s.pedidoPendente = null;
+}
 
-      if (res.status === 429 || /quota|billing|insufficient/i.test(erro)) {
-        try {
-          const ntfyTopic = process.env.NTFY_TOPIC;
-          if (ntfyTopic) {
-            await fetch(`https://ntfy.sh/${ntfyTopic}`, {
-              method: 'POST',
-              headers: { 'Title': 'Creditos da OpenAI esgotados', 'Priority': 'urgent', 'Tags': 'warning' },
-              body: 'O agente nao consegue mais transcrever audios. Acessa platform.openai.com e recarrega os creditos.'
-            });
+// ── Fretes por bairro ─────────────────────────
+const FRETES = {
+  10: ['ipanema','copacabana','leme','leblon'],
+  15: ['botafogo','lagoa','urca'],
+  20: ['flamengo','gloria','glória','gavea','gávea','catete','humaita','humaitá']
+};
+
+function calcularFrete(endereco) {
+  if (!endereco) return null;
+  const end = endereco.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  for (const [valor, bairros] of Object.entries(FRETES)) {
+    if (bairros.some(b => end.includes(b))) return Number(valor);
+  }
+  return null; // frete desconhecido — chamar Luiz humano
+}
+
+// ── Catálogo de produtos (tabelas prontas) ─────
+const CATALOGO = {
+  durateston: `✅ *Durateston - Cooper Farmacêutica* 🇮🇳 ( Linha premium)
+*250mg/ml. Cx com 10 AMPOLAS*
+R$360
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Durateston - Pharmacom* 🇪🇺 ( Linha premium)
+*300mg/ml. Frasco 10ml*
+R$330
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Durateston - Bratva Labs* ✴️
+*250mg/ml. Cx com 10 AMPOLA*
+R$250
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Durateston - Lander Land Gold* 🥇
+*250mg/ml. Frasco 10ml*
+R$210
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Durateston - Muscle Labs* 🐍
+*250mg/ml Frasco 10ml*
+R$190
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Durateston - King Pharma* 👑
+*250mg/ml. Frasco 10ml*
+R$180
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Durateston - Swiss Pharma* 🧬
+*250mg/ml. Frasco 10ml*
+R$140`,
+
+  enantato: `✅ *Enantato de Testosterona - Eminence* 🇮🇳 (Importada)
+*250mg/ml. Cx com 10 AMPOLAS*
+R$360
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Enantato - Bratva Labs* ✴️
+*250mg/ml. Cx com 10 AMPOLA*
+R$250
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Enantato - Lander Land Gold* 🥇
+*250mg/ml. Frasco 10ml*
+R$210
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Enantato - Muscle Labs* 🐍
+*250mg/ml. Frasco 10ml*
+R$190
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Enantato - King Pharma* 👑
+*250mg/ml. Frasco 10ml*
+R$180
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Enantato - Swiss Pharma* 🧬
+*250mg/ml. Frasco 10ml*
+R$140`,
+
+  masteron: `✅️ *Masteron Propionato - Cooper Pharma* 🇮🇳
+*100mg/ml. Cx com 10 Ampolas*
+R$450
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Masteron Propionato - Lander Land Gold* 🥇
+*100mg/ml. Frasco 10ml*
+R$220
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Masteron Propionato - Bratva Labs* ✴️
+*100mg/ml. Frasco 10ml*
+R$200
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Masteron Propionato - Swiss Pharma* 🧬
+*100mg/ml. Frasco 10ml*
+R$140
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Masteron Enantato - King Pharma* 👑
+*100mg/ml. Frasco 10ml*
+R$190
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Masteron Enantato - Swiss Pharma* 🧬
+*200mg/ml. Frasco 10ml*
+R$160`,
+
+  primobolan: `✅️ *Primobolan - Muscle Labs* 🐍
+*100mg/ml. Frasco 10ml*
+R$350
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Primobolan - King Pharma* 👑
+*100mg/ml. Frasco 10ml*
+R$320
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Primobolan - Swiss Pharma* 🧬
+*100mg/ml. Frasco 10ml*
+R$230`,
+
+  deca: `✅ *Deca - Pharmacom* 🇪🇺 (Linha premium)
+*300mg/ml. Cx com 10 AMPOLAS*
+R$350
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅ *Deca - Oxygen* 🇰🇼 (Importada)
+*250mg/ml. Cx com 10 AMPOLAS*
+R$270
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Deca - Lander Land Gold* 🥇
+*200mg/ml. Frasco 10ml*
+R$210
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅ *Deca - Muscle Labs* 🐍
+*300mg/ml. Frasco 10ml*
+R$190
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Deca - King Pharma* 👑
+*300mg/ml. Frasco 10ml*
+R$180
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Deca - Swiss Pharma* 🧬
+*300mg/ml. Frasco 10ml*
+R$140`,
+
+  trembolona: `✅️ *Trembolona Acetato - Lander Land Gold* 🥇
+*100mg/ml. Frasco 10ml*
+R$230
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Trembolona Acetato - Muscle Labs* 🐍
+*100mg/ml. Frasco 10ml*
+R$190
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Trembolona Acetato - Swiss Pharma* 🧬
+*100mg/ml. Frasco 10ml*
+R$140
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+☑️ *Trembolona Enantato - Lander Land Gold* 🥇
+*200mg/ml. Frasco 10ml*
+R$220
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+☑️ *Trembolona Enantato - Swiss Pharma* 🧬
+*200mg/ml. Frasco 10ml*
+R$150`,
+
+  oxandrolona: `✅️ *Oxandrolona - Lander Land*
+*10mg/cps. Frasco 50 comprimidos*
+R$240
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Oxandrolona - Lander Land*
+*5mg/cps. Frasco 100 comprimidos*
+R$240
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Oxandrolona Manipulada* 🧬
+*20mg/cps. Frasco 100 comprimidos*
+R$200
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Oxandrolona Manipulada* 🧬
+*10mg/cps. Frasco 100 comprimidos*
+R$150`,
+
+  peptideos: `✅ *Peptídeos - GEN HEATH* 🧬 (Importado)
+
+📍GHK-cu 100mg — R$850
+📍Most-C 10mg — R$750
+📍Ipamorelin 10mg — R$750
+📍HGH Frag 176-191 5mg — R$750
+📍BPC 157 10mg — R$750
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Peptídeos - ZPHC* 🧬 (Importado)
+
+Ipamorelin 5mg — R$370
+TB500 5mg — R$370
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *NEO Peptídeos* 🧬 (Importado)
+
+GHK-CU 100mg — R$650
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅ *Better Performance* 🧬 (Nacional)
+
+Tesamorelin 5mg — R$180
+TB 500 5mg — R$180
+GHRp6 5mg — R$180
+Slupp 332 5mg — R$180`,
+
+  gh: `💎 *GH Somatropina (Biomanguinhos)*
+*Caixa com 4ui* — R$60
+🚨 (Valor para pedidos acima de 10 cxs)
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+💎 *GH Genotropin caneta 36ui*
+R$1.250`,
+
+  emagrecedores: `✅ *Retatrutida - ZPHC*
+Cx fechada 120mg (5 frascos 24mg c/ diluente) — R$4.300
+Frasco 24mg c/ diluente — R$920
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅ *Retatrutida - Oxygen*
+Frasco 40mg c/ diluente — R$1.450
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *LIPOLESS (Tirzepatida)*
+Cx fechada 60mg — R$1.200
+Frasco 15mg — R$350
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Ozempic caneta 1mg* — R$1.250
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+🔥 *Clembuterol - Lander Land Gold*
+Caixa 50 comprimidos 0.04mg — R$150
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+🔥 *Lipostabil*
+5 ampolas 5ml cada — R$140`
+};
+
+// ── System Prompt do Luiz ─────────────────────
+function buildSystemPrompt(foraDoHorario = false, msgHorario = "") {
+  const pixKey  = process.env.PIX_KEY;
+  const pixName = process.env.PIX_NAME;
+
+  return `Você é o Luiz, vendedor da loja. Não é um robô, não é um agente — é o Luiz mesmo.
+
+PERSONALIDADE:
+- Linguagem carioca, urbana, descontraída. Sem formalidade nenhuma.
+- Usa: opa, bora, fechou, partiu, pra cima, ai papaiii, boa garotão, masss rapazzz, c é loko, tá blz, tá legal
+- NUNCA usa "mano" ou "brother" — não fazem parte do vocabulário normal do Luiz
+- "brother" só pode aparecer 1x em todo o atendimento, e só num momento bem pontual de zoeira/finalização leve com cliente que já tem confiança — nunca repetido, nunca em conversa séria
+- Dinheiro = "mingau" (ex: "180 mingau", "10 mingau de entrega")
+- Com clientes conhecidos pode chamar de "amigo", usar "vc é fechamento" e afins
+- Com clientes novos, mais tranquilo, sem intimidade forçada
+- Às vezes faz piadas atuais ou imita o Silvio Santos: "mah oieeee... vem pra k vem pra k... é jequiti q vc qr" 😄
+- ESCREVE POUCO. Frases curtas, direto ao ponto, sem enrolação. Nunca manda parágrafo grande — se precisar passar várias infos, quebra em mensagens curtas e objetivas
+- Responde só o que foi perguntado, sem voltar a explicar o que já foi dito antes na conversa
+- ABERTURA DE CONVERSA: sempre informal, tipo "opa", "eai", "oi", "blz?" — NUNCA "como posso te ajudar", "em que posso ajudar" ou qualquer abertura de atendimento formal. A conversa é entre amigos, não atendimento.
+- Nunca usa: "posso te ajudar em algo mais", "prezado", "atenciosamente", "como posso ajudar", frases formais
+- Nunca fala o nome da loja pro cliente
+- Nunca pergunta orçamento
+- Nunca força venda — responde só o que o cliente perguntou, sem pressionar fechamento, sem perguntar "fecha?" toda hora, sem oferecer opções extras que não foram pedidas
+- Nunca expõe a própria mecânica interna pro cliente (não diz "vi no catálogo", "no meu sistema tem", "deixa eu checar minha lista" — fala como se simplesmente soubesse, naturalmente)
+- "vc é fechamento" só com clientes conhecidos
+- IDENTIDADE: se o cliente perguntar, estranhar, ou suspeitar que está falando com IA/robô/outra pessoa: responde que é o assistente do Luiz. Nunca nega ser um assistente, mas também nunca afirma tecnicamente "sou uma inteligência artificial" — fala de forma natural, como "sou o assistente dele aqui" ou similar.
+- EMOJIS: pode usar emoji ocasionalmente pra dar leveza, mas SEM repetir o mesmo emoji em quase toda mensagem da conversa. Varia os emojis e usa com moderação — não precisa ter emoji em toda frase.
+
+CONHECIMENTO:
+- Expert em hormônios, suplementos e peptídeos
+- Conhece profundamente: testosterona, primobolan, masteron, trembolona, deca, oxandrolona, GH, peptídeos (GHK-Cu, BPC-157, TB500, Ipamorelin etc), clembuterol, tirzepatida, retatrutida, ozempic
+- Sabe sobre organismo masculino e feminino, ciclos, protocolos, efeitos colaterais, pós-ciclo
+- Para mulheres: sabe que Masteron preserva feminilidade, Primobolan é mais seguro, doses menores
+
+PERGUNTAS DE "COMO USAR" (via de aplicação, frequência) vs "QUAL DOSE":
+- "Como usar/aplicar": responde direto e prático (via de aplicação, frequência, progressão), SEM precisar mencionar acompanhamento médico nesse caso.
+- "Qual dose eu uso": informa a dose inicial concreta e real, baseada em prática comum e segura conhecida (não fica vago tipo "depende, comece baixo, vê com seu médico" sem dar nenhum número) — dá o valor de início, e pode mencionar que ajusta com exames/acompanhamento conforme resposta do corpo.
+
+EFEITOS COLATERAIS RELATADOS (de qualquer produto, ex: queda de cabelo, retenção de líquido, etc):
+- Identifica o efeito mais provável daquele composto específico (cada hormônio tem efeitos diferentes: aromatização, androgenicidade, etc) e explica de forma tranquila, sem alarmar.
+- Sugere fazer exames pra identificar o que está acontecendo e ajustar.
+- Se for relato de masculinização em mulher (ex: aumento de clitóris, voz mais grave): trata com naturalidade, sem demonstrar preocupação exagerada, indica produto com menor risco androgênico (ex: Primobolan) e menciona a dose inicial segura pra esse caso.
+
+USO PARA TERCEIROS (cliente perguntando sobre uso da mãe, pai, amigo etc):
+- Pode opinar e indicar produto normalmente, considerando o contexto (idade, condição, ex: menopausa).
+- Reforça de forma natural que acompanhamento médico ajuda a monitorar com exames.
+- Nunca oferece valores/preço no final da resposta de forma proativa — só informa preço se o cliente perguntar especificamente.
+
+QUANDO O CLIENTE PERGUNTA SE "TEM" UM PRODUTO QUE EXISTE NO CATÁLOGO:
+- Confirma que tem ("tenho sim!") e JÁ ENVIA a tabela completa daquela categoria usando enviar_catalogo, sem perguntar antes qual variação/marca ele quer — deixa ele escolher vendo as opções.
+
+QUANDO PERGUNTAREM "QUAL A MELHOR MARCA":
+- NÃO indica uma marca específica como "a melhor". Explica que praticamente todas as marcas têm mais de 15 anos de mercado e são confiáveis, com exceção da Swiss Pharma que é mais recente. A qualidade é proporcional ao preço — quanto mais cara, mais linha premium/importada, mas todas funcionam bem dentro da própria faixa.
+
+CATÁLOGO disponível em JSON para consulta quando precisar — use a ferramenta enviar_catalogo pra mandar a tabela pronta quando o cliente quiser ver preços e opções. Em conversa normal, ao responder se "tem" um produto, fale só o que tem disponível de forma direta e natural, como quem já sabe de cabeça — nunca mencione "catálogo", "sistema", "lista" ou qualquer termo que pareça consulta a uma base de dados.
+
+FRETE E ENTREGA:
+- Entrega em qualquer lugar — bairros fixos e Correios
+- Bairros com frete fixo: calculado automaticamente
+- Bairros fora da lista: fala "só um minuto que já coto!" e aciona o Luiz humano (sem explicar que é fora da zona)
+- Correios: quando cliente perguntar, fala "Envio sim! Me passa o CEP que já coto pra você" e usa a ferramenta cotar_correios com o CEP do cliente
+- Nunca mencionar "zona fixa", "fora da área" ou similares — sempre positivo
+- FERIADOS: trata feriados nacionais bem conhecidos como domingo (loja não atende). Para feriados locais/municipais que não tem certeza, não inventa — fala que vai confirmar e aciona o Luiz humano se a pergunta for específica sobre um feriado que não tem certeza se afeta a operação. O Luiz humano pode adicionar uma regra extra avisando sobre feriados locais quando for o caso.
+- HORÁRIO LIMITE DE PIX PARA ENTREGA NO MESMO DIA: bairros fora da área fixa (cotação manual) — PIX confirmado até 14h30 garante entrega no mesmo dia. Bairros com frete fixo cadastrado — PIX confirmado até 18h garante entrega no mesmo dia. Depois desses horários, mesmo dentro do expediente, a entrega passa pro próximo dia útil. Avisa isso de forma natural quando relevante (ex: cliente perguntando se ainda dá tempo hoje).
+- Se o cliente perguntar por um horário específico de entrega (ex: "dá pra chegar até as 16h", "consegue antes das 19h"): NUNCA confirma horário exato por conta própria — sempre aciona o Luiz humano pra verificar a rota do motoboy antes de prometer qualquer horário.
+- Se o cliente perguntar se o pedido "já foi entregue" e ainda não tiver confirmação de entrega (sem o sinal do Luiz humano): responde que está em rota de entrega, sem acionar o Luiz humano só por essa pergunta.
+
+PAGAMENTO:
+- Somente PIX
+- Após cliente querer fechar: passa o valor do produto primeiro
+- Quando cliente confirmar: soma com frete e usa a ferramenta enviar_pix
+- PIX enviado em duas mensagens separadas (instruções + chave sozinha pra copiar fácil)
+- Só dá baixa no estoque e despacha pro grupo APÓS confirmar o PIX
+
+LUIZ HUMANO:
+- Quando precisar acionar o Luiz humano (frete desconhecido ou situação complexa): diz "só um minuto!" e usa a ferramenta acionar_luiz_humano
+- Após Luiz humano intervir: aguarda 15 minutos sem responder após última msg do cliente
+- Depois retoma normalmente
+
+CONTEXTO E DÚVIDAS — REGRA CRÍTICA:
+- Quando o cliente chega falando algo que pressupõe contexto anterior (ex: "vc enviou o produto lá?", "ficou pra quando?", "qto ficou aquilo?"), SEMPRE primeiro procura no histórico da conversa se já tem essa informação antes de responder.
+- Se achar a info no histórico: responde direto e curto usando ela.
+- Se a mensagem do cliente for vaga e faltar um dado pontual e simples (ex: qual produto, qual quantidade): pode perguntar de volta, bem curto, só o que falta. Ex: "qual produto mesmo?"
+- Se NÃO tiver a informação no histórico e a pergunta não for algo simples de esclarecer (ex: cliente cobra algo específico que a IA não tem registro, ou situação confusa/ambígua): NUNCA diz "não entendi", "não tenho essa informação" ou qualquer variação disso pro cliente. Nesses casos, fala só "só um minutinho!" (ou variação curta) e usa a ferramenta acionar_luiz_humano, explicando o motivo no campo "motivo" pro Luiz humano entender o que está pendente.
+- Regra de ouro: o cliente NUNCA deve perceber que a IA ficou confusa ou sem resposta. Ou ela sabe e responde curto, ou ela aciona o Luiz humano discretamente.
+
+ÁUDIOS (mensagens marcadas com [ÁUDIO TRANSCRITO]):
+- Trate a transcrição como se fosse o texto digitado pelo cliente normalmente.
+- Transcrição automática pode vir com erro, palavra faltando, ou trecho confuso/cortado.
+- Se a transcrição tiver alguma palavra ou trecho que não faz sentido, ficar ambíguo, ou parecer incompleto a ponto de mudar o significado do pedido: NÃO tenta adivinhar nem pede pro cliente repetir o áudio. Aciona o Luiz humano direto, e no campo "motivo" inclui o texto transcrito pra ele entender o que pode estar errado.
+- Se a mensagem vier como "[ÁUDIO ENVIADO — não foi possível transcrever]": aciona o Luiz humano imediatamente, sem tentar adivinhar o conteúdo.
+
+MENSAGEM DE ENTREGA CONFIRMADA:
+Após despachar o pedido, enviar ao cliente:
+"✅️ Está entregue!
+
+🚨Por favor, confira o pedido no mesmo dia! Não nos responsabilizamos por danos após o dia da entrega.
+
+*MUITO OBRIGADO E BONS GANHOS!* 💪😄"
+
+PAGAMENTO PIX:
+- Nome: ${pixName}
+- Chave: ${pixKey}
+- Banco: Santander
+
+HORÁRIO:
+${foraDoHorario ? `⚠️ ${msgHorario} Pode receber pedido e PIX normalmente, mas deixa claro quando será a entrega. Não precisa repetir isso em toda mensagem, só quando relevante.` : "Horário de entrega: seg-sex 12h às 20h, sábado 12h às 16h. Entrega somente após confirmação do PIX."}
+${(() => {
+  try {
+    const regras = require('./admin').getRegrasExtras();
+    return regras ? `\nREGRAS EXTRAS DEFINIDAS PELO LUIZ HUMANO (seguir com prioridade):\n${regras}` : '';
+  } catch (_) { return ''; }
+})()}`;
+}
+
+// ── Ferramentas ───────────────────────────────
+const TOOLS = [
+  {
+    name: 'listar_produtos',
+    description: 'Lista todos os produtos disponíveis em estoque.',
+    input_schema: { type: 'object', properties: {}, required: [] }
+  },
+  {
+    name: 'buscar_produto',
+    description: 'Busca produto pelo nome (busca parcial, resolve apelidos).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        termo: { type: 'string', description: 'Nome ou apelido do produto' }
+      },
+      required: ['termo']
+    }
+  },
+  {
+    name: 'consultar_estoque',
+    description: 'Consulta estoque e preço de um produto específico.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        produto: { type: 'string', description: 'Nome exato ou ID do produto' }
+      },
+      required: ['produto']
+    }
+  },
+  {
+    name: 'baixar_estoque',
+    description: 'Dá baixa no estoque após PIX confirmado.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        produto:    { type: 'string' },
+        quantidade: { type: 'number' }
+      },
+      required: ['produto', 'quantidade']
+    }
+  },
+  {
+    name: 'entrar_estoque',
+    description: 'Dá entrada de produtos no estoque (dono da loja).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        produto:    { type: 'string' },
+        quantidade: { type: 'number' },
+        preco:      { type: 'number' }
+      },
+      required: ['produto', 'quantidade']
+    }
+  },
+  {
+    name: 'enviar_catalogo',
+    description: 'Envia a tabela/catálogo de um produto específico para o cliente, no formato exato das mensagens prontas.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        categoria: {
+          type: 'string',
+          description: 'Categoria do produto: durateston, enantato, masteron, primobolan, deca, trembolona, oxandrolona, peptideos, gh, emagrecedores'
+        }
+      },
+      required: ['categoria']
+    }
+  },
+  {
+    name: 'calcular_frete',
+    description: 'Calcula o frete com base no endereço do cliente. Retorna o valor ou null se precisar acionar Luiz humano.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        endereco: { type: 'string', description: 'Endereço completo do cliente' }
+      },
+      required: ['endereco']
+    }
+  },
+  {
+    name: 'cotar_correios',
+    description: 'Cota o frete pelos Correios (PAC e SEDEX) a partir do CEP do cliente. CEP de origem: Copacabana (22020-000).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        cepDestino: { type: 'string', description: 'CEP do cliente (só números)' },
+        pesoGramas: { type: 'number', description: 'Peso do pedido em gramas (padrão 300g por frasco)' }
+      },
+      required: ['cepDestino']
+    }
+  },
+  {
+    name: 'acionar_luiz_humano',
+    description: 'Aciona o Luiz humano para situações que precisam de intervenção manual (frete desconhecido, desconto especial, etc). Envia notificação pro grupo admin.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        motivo:  { type: 'string', description: 'Motivo do acionamento' },
+        cliente: { type: 'string', description: 'Número ou nome do cliente' }
+      },
+      required: ['motivo', 'cliente']
+    }
+  },
+  {
+    name: 'enviar_pix',
+    description: 'Envia dados do PIX ao cliente em duas mensagens: instruções e chave separada para copiar fácil.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        total: { type: 'number', description: 'Valor total a pagar' }
+      },
+      required: ['total']
+    }
+  },
+  {
+    name: 'despachar_pedido',
+    description: 'Envia pedido pro grupo de entrega após PIX confirmado. Não inclui valores.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        clienteNome:     { type: 'string' },
+        clienteNumero:   { type: 'string' },
+        itens:           {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              nome:       { type: 'string' },
+              quantidade: { type: 'number' }
+            }
           }
-        } catch (_) {}
+        },
+        enderecoEntrega: { type: 'string' }
+      },
+      required: ['clienteNumero', 'itens', 'enderecoEntrega']
+    }
+  }
+];
+
+// ── Executor de ferramentas ───────────────────
+async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNome) {
+  console.log(`[Tool] ${nome}`, input);
+
+  switch (nome) {
+
+    case 'listar_produtos': {
+      const lista = estoque.listarProdutos();
+      return { resultado: lista.length ? lista : 'Nenhum produto disponível.' };
+    }
+
+    case 'buscar_produto': {
+      const encontrados = estoque.buscarProduto(input.termo);
+      return { resultado: encontrados.length ? encontrados : `Nenhum produto encontrado para "${input.termo}".` };
+    }
+
+    case 'consultar_estoque': {
+      const prod = estoque.consultarEstoque(input.produto);
+      return { resultado: prod || `Produto "${input.produto}" não encontrado.` };
+    }
+
+    case 'baixar_estoque': {
+      const r = estoque.baixarEstoque(input.produto, input.quantidade);
+      return { resultado: r };
+    }
+
+    case 'entrar_estoque': {
+      const r = estoque.entrarEstoque(input.produto, input.quantidade, input.preco || null);
+      return { resultado: r };
+    }
+
+    case 'enviar_catalogo': {
+      const cat = CATALOGO[input.categoria.toLowerCase()];
+      if (!cat) return { resultado: `Categoria "${input.categoria}" não encontrada.` };
+      await enviarTexto(clienteNumero, cat);
+      return { resultado: { ok: true, mensagem: `Catálogo de ${input.categoria} enviado.` } };
+    }
+
+    case 'calcular_frete': {
+      sessao.endereco = input.endereco;
+      const frete = calcularFrete(input.endereco);
+      sessao.frete = frete;
+      if (frete === null) {
+        return { resultado: { frete: null, precisaAcionarLuiz: true, mensagem: 'Bairro fora da zona de frete fixo. Acionar Luiz humano para cotar.' } };
+      }
+      return { resultado: { frete, endereco: input.endereco } };
+    }
+
+    case 'cotar_correios': {
+      const cepOrigem = '22020000';
+      const cepDestino = input.cepDestino.replace(/\D/g, '');
+      const peso = input.pesoGramas || 300;
+
+      try {
+        const servicos = ['04669', '40010'];
+        const resultados = [];
+
+        for (const servico of servicos) {
+          const url = `http://ws.correios.com.br/calculador/CalcPrecoPrazo.asmx/CalcPrecoPrazo?nCdEmpresa=&sDsSenha=&nCdServico=${servico}&sCepOrigem=${cepOrigem}&sCepDestino=${cepDestino}&nVlPeso=${peso/1000}&nCdFormato=1&nVlComprimento=16&nVlAltura=12&nVlLargura=14&sCdMaoPropria=n&nVlValorDeclarado=0&sCdAvisoRecebimento=n&StrRetorno=xml&nIndicaCalculo=3`;
+
+          const res = await fetch(url);
+          const xml = await res.text();
+
+          const valorMatch = xml.match(/<Valor>(.*?)<\/Valor>/);
+          const prazoMatch = xml.match(/<PrazoEntrega>(.*?)<\/PrazoEntrega>/);
+          const erroMatch  = xml.match(/<MsgErro>(.*?)<\/MsgErro>/);
+
+          if (valorMatch && prazoMatch && !erroMatch?.[1]) {
+            const nome = servico === '40010' ? 'SEDEX' : 'PAC';
+            const valor = valorMatch[1].replace(',', '.');
+            const prazo = prazoMatch[1];
+            resultados.push({ servico: nome, valor: parseFloat(valor), prazo: `${prazo} dias úteis` });
+          }
+        }
+
+        if (resultados.length === 0) {
+          return { resultado: { ok: false, erro: 'Não foi possível cotar. Acionar Luiz humano.' } };
+        }
+
+        return { resultado: { ok: true, opcoes: resultados } };
+
+      } catch (err) {
+        return { resultado: { ok: false, erro: 'Erro ao consultar Correios. Acionar Luiz humano.' } };
+      }
+    }
+
+    case 'acionar_luiz_humano': {
+      const grupoAdmin = process.env.ADMIN_GROUP_JID;
+      // Sempre usa o nome salvo (pushName) e número reais, em vez de
+      // depender do que a IA decidiu escrever em input.cliente — assim
+      // o Luiz humano nunca recebe "cliente desconhecido" pra alguém
+      // que já está salvo nos contatos dele.
+      const identificacaoCliente = clienteNome && clienteNome !== 'cliente'
+        ? `${clienteNome} (${clienteNumero})`
+        : clienteNumero;
+
+      if (grupoAdmin) {
+        await enviarTexto(grupoAdmin,
+          `🔔 *Atenção Luiz!*\n\n` +
+          `Cliente: ${identificacaoCliente}\n` +
+          `Motivo: ${input.motivo}`
+        );
       }
 
-      return null;
+      // Notificação push via ntfy — alarme imediato pro celular do Luiz humano
+      const ntfyTopic = process.env.NTFY_TOPIC;
+      if (ntfyTopic) {
+        try {
+          await fetch(`https://ntfy.sh/${ntfyTopic}`, {
+            method: 'POST',
+            headers: {
+              'Title': '🔔 Luiz, te chamaram!',
+              'Priority': 'urgent',
+              'Tags': 'rotating_light'
+            },
+            body: `Cliente: ${identificacaoCliente}\nMotivo: ${input.motivo}`
+          });
+        } catch (errNtfy) {
+          console.error('[ntfy] Erro ao enviar notificação:', errNtfy);
+        }
+      }
+
+      sessao.luizHumanoAtivo = true;
+      sessao.luizHumanoUltimaMsg = Date.now();
+      return { resultado: { ok: true, mensagem: 'Luiz humano acionado.' } };
     }
 
-    const data = await res.json();
-    console.log('[Transcricao] Whisper respondeu com sucesso:', data.text);
-    return data.text?.trim() || null;
+    case 'enviar_pix': {
+      const pixKey  = process.env.PIX_KEY;
+      const pixName = process.env.PIX_NAME;
 
-  } catch (err) {
-    console.error('[Transcricao] Erro ao transcrever:', err);
-    return null;
+      let total = Number(input.total);
+      let descontoAplicado = 0;
+
+      try {
+        const especial = require('./admin').getClienteEspecial(clienteNumero);
+        if (especial?.desconto) {
+          descontoAplicado = especial.desconto;
+          total = total * (1 - descontoAplicado / 100);
+        }
+      } catch (_) {}
+
+      const totalFormatado = total.toFixed(2);
+
+      await enviarTexto(clienteNumero,
+        `💰 *Pagamento via PIX*\n` +
+        `Nome: ${pixName}\n` +
+        `Banco: Santander\n` +
+        `Valor: R$ ${totalFormatado}\n\n` +
+        `Copie a chave abaixo 👇`
+      );
+      await new Promise(r => setTimeout(r, 1000));
+      await enviarTexto(clienteNumero, pixKey);
+
+      sessao.aguardandoPix = true;
+      return { resultado: { ok: true, totalCobrado: totalFormatado, descontoAplicado } };
+    }
+
+    case 'despachar_pedido': {
+      const grupoEntrega = process.env.DELIVERY_GROUP_JID;
+      if (!grupoEntrega) return { resultado: { ok: false, erro: 'DELIVERY_GROUP_JID não configurado.' } };
+
+      const itensTexto = input.itens
+        .map(i => `📦 ${i.nome}${i.quantidade > 1 ? ` (${i.quantidade}x)` : ''}`)
+        .join('\n');
+
+      const msg =
+        `🛵 *PEDIDO — Force Imports*\n\n` +
+        `👤 *Cliente:* ${input.clienteNome || input.clienteNumero}\n` +
+        `📍 *Endereço:* ${input.enderecoEntrega}\n\n` +
+        `${itensTexto}\n\n` +
+        `✅ *PIX confirmado!*`;
+
+      await enviarTexto(grupoEntrega, msg);
+
+      try {
+        require('./admin').registrarPedidoNoRelatorio({
+          clienteNumero,
+          clienteNome: input.clienteNome || input.clienteNumero,
+          itens: input.itens,
+          enderecoEntrega: input.enderecoEntrega
+        });
+      } catch (_) {}
+
+      await enviarTexto(clienteNumero,
+        `✅️ Está entregue!\n\n` +
+        `🚨Por favor, confira o pedido no mesmo dia! Não nos responsabilizamos por danos após o dia da entrega.\n\n` +
+        `*MUITO OBRIGADO E BONS GANHOS!* 💪😄`
+      );
+
+      limparCarrinho(clienteNumero);
+      return { resultado: { ok: true } };
+    }
+
+    default:
+      return { resultado: `Ferramenta desconhecida: ${nome}` };
   }
 }
 
-/**
- * Transcreve áudio a partir de uma URL (quando Evolution API manda link em vez de base64)
- * @param {string} url - URL do arquivo de áudio
- * @returns {Promise<string>} texto transcrito
- */
-async function transcreverAudioUrl(url) {
-  const OPENAI_KEY = process.env.OPENAI_API_KEY;
-  if (!OPENAI_KEY) {
-    console.error('[Transcricao] OPENAI_API_KEY não configurada.');
-    return null;
-  }
+// ── Loop principal ────────────────────────────
+async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cliente') {
+  const sessao = getSessao(clienteNumero);
 
-  try {
-    const resAudio = await fetch(url);
-    if (!resAudio.ok) {
-      console.error('[Transcricao] Erro ao baixar áudio da URL:', resAudio.status);
-      return null;
+  // Se Luiz humano interveio, aguarda 15min após última msg do cliente
+  if (sessao.luizHumanoAtivo) {
+    const agora = Date.now();
+    const quinzeMin = 15 * 60 * 1000;
+    sessao.luizHumanoUltimaMsg = agora;
+    if (agora - sessao.luizHumanoUltimaMsg < quinzeMin) {
+      return null; // não responde
     }
-    const arrayBuffer = await resAudio.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    const base64 = buffer.toString('base64');
-
-    return await transcreverAudioBase64(base64, 'audio/ogg');
-
-  } catch (err) {
-    console.error('[Transcricao] Erro ao processar URL de áudio:', err);
-    return null;
+    // Passou 15min, retoma
+    sessao.luizHumanoAtivo = false;
+    sessao.luizHumanoUltimaMsg = null;
   }
+
+  // Verifica horário de entrega (horário de Brasília)
+  const _agora = new Date();
+  const _horaBSB = new Date(_agora.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+  const _hora = _horaBSB.getHours();
+  const _diaSemana = _horaBSB.getDay(); // 0=domingo, 6=sábado
+
+  let _foraHorario = false;
+  let _msgHorario = "";
+
+  if (_diaSemana === 0) {
+    _foraHorario = true;
+    _msgHorario = "DOMINGO: Não há entrega hoje. Pedidos feitos hoje serão entregues na segunda-feira a partir das 12h.";
+  } else if (_diaSemana === 6) {
+    if (_hora < 12 || _hora >= 16) {
+      _foraHorario = true;
+      _msgHorario = "SÁBADO FORA DO HORÁRIO: Entregas aos sábados são das 12h às 16h. Pedido recebido, entrega na segunda a partir das 12h.";
+    }
+  } else {
+    if (_hora < 12 || _hora >= 20) {
+      _foraHorario = true;
+      _msgHorario = "FORA DO HORÁRIO: Entregas são das 12h às 20h. Pedido recebido, entrega amanhã a partir das 12h.";
+    }
+  }
+
+  sessao.historico.push({ role: "user", content: mensagemTexto });
+
+  if (sessao.historico.length > 40) {
+    sessao.historico = sessao.historico.slice(-40);
+  }
+
+  let resposta = null;
+
+  while (true) {
+    let resultado;
+    try {
+      resultado = await client.messages.create({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1024,
+        system: buildSystemPrompt(_foraHorario, _msgHorario),
+        tools: TOOLS,
+        messages: sessao.historico
+      });
+    } catch (errApi) {
+      // PROTEÇÃO CONTRA HISTÓRICO CORROMPIDO:
+      // Se a API recusar a requisição por erro de estrutura (ex: tool_use
+      // sem tool_result de uma sessão antiga/corrompida), reseta o
+      // histórico desse cliente e tenta novamente do zero, ao invés de
+      // travar a conversa pra sempre.
+      const ehErroEstrutura = errApi?.status === 400 &&
+        (errApi?.error?.error?.type === 'invalid_request_error' || errApi?.error?.type === 'invalid_request_error');
+
+      if (ehErroEstrutura && sessao.historico.length > 1) {
+        console.error(`[Agente] Histórico corrompido para ${clienteNumero}, resetando sessão. Erro:`, errApi?.message || errApi);
+        sessao.historico = [{ role: 'user', content: mensagemTexto }];
+        continue;
+      }
+
+      // CRÉDITOS ESGOTADOS: erro 400 (invalid_request_error sobre billing)
+      // ou 403/429 dependendo de como a Anthropic sinaliza saldo zerado.
+      const errType = errApi?.error?.error?.type || errApi?.error?.type || '';
+      const errMsg  = (errApi?.error?.error?.message || errApi?.message || '').toLowerCase();
+      const ehSemCredito =
+        errType === 'invalid_request_error' && /credit|balance|billing/.test(errMsg) ||
+        errApi?.status === 403 && /credit|balance/.test(errMsg);
+
+      if (ehSemCredito) {
+        console.error('[Agente] CRÉDITOS ESGOTADOS na Anthropic:', errMsg);
+        await dispararAlertaCritico(
+          'creditos_anthropic',
+          'Créditos da Anthropic esgotados!',
+          'O agente parou de responder porque os créditos da conta Anthropic acabaram. Acessa console.anthropic.com e recarrega pra voltar a funcionar.'
+        );
+      }
+
+      console.error('[Agente] Erro irrecuperável na API:', errApi);
+      throw errApi;
+    }
+
+    if (resultado.stop_reason === 'tool_use') {
+      sessao.historico.push({ role: 'assistant', content: resultado.content });
+
+      const toolResults = [];
+      for (const bloco of resultado.content) {
+        if (bloco.type === 'tool_use') {
+          // CRÍTICO: nunca deixar um tool_use sem tool_result correspondente,
+          // mesmo se a ferramenta lançar erro — senão corrompe o histórico
+          // pra sempre (a API passa a rejeitar TODAS as mensagens futuras
+          // dessa sessão com "tool_use ids found without tool_result").
+          let conteudoResultado;
+          try {
+            const saida = await executarFerramenta(bloco.name, bloco.input, sessao, clienteNumero, clienteNome);
+            conteudoResultado = JSON.stringify(saida.resultado);
+          } catch (errFerramenta) {
+            console.error(`[Tool] Erro ao executar ${bloco.name}:`, errFerramenta);
+            conteudoResultado = JSON.stringify({
+              erro: true,
+              mensagem: 'Erro interno ao executar a ferramenta. Acionar Luiz humano se necessário.'
+            });
+          }
+
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: bloco.id,
+            content: conteudoResultado
+          });
+        }
+      }
+
+      sessao.historico.push({ role: 'user', content: toolResults });
+      continue;
+    }
+
+    resposta = resultado.content
+      .filter(b => b.type === 'text')
+      .map(b => b.text)
+      .join('\n')
+      .trim();
+
+    sessao.historico.push({ role: 'assistant', content: resposta });
+    break;
+  }
+
+  return resposta || null;
 }
 
-module.exports = { transcreverAudioBase64, transcreverAudioUrl };
+module.exports = { processarMensagem, getSessao };
