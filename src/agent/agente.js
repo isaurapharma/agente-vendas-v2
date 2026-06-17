@@ -723,20 +723,24 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
 
       // Notificação push via ntfy — alarme imediato pro celular do Luiz humano
       const ntfyTopic = process.env.NTFY_TOPIC;
+      console.log('[ntfy] Tentando enviar notificação. Tópico configurado?', !!ntfyTopic, '| Valor:', ntfyTopic);
       if (ntfyTopic) {
         try {
-          await fetch(`https://ntfy.sh/${ntfyTopic}`, {
+          const respNtfy = await fetch(`https://ntfy.sh/${ntfyTopic}`, {
             method: 'POST',
             headers: {
-              'Title': '🔔 Luiz, te chamaram!',
+              'Title': 'Luiz, te chamaram!',
               'Priority': 'urgent',
               'Tags': 'rotating_light'
             },
             body: `Cliente: ${identificacaoCliente}\nMotivo: ${input.motivo}`
           });
+          console.log('[ntfy] Resposta do ntfy.sh, status:', respNtfy.status);
         } catch (errNtfy) {
-          console.error('[ntfy] Erro ao enviar notificação:', errNtfy);
+          console.error('[ntfy] ERRO ao enviar notificação:', errNtfy.message, errNtfy.stack);
         }
+      } else {
+        console.error('[ntfy] NTFY_TOPIC não configurado, notificação não enviada.');
       }
 
       sessao.luizHumanoAtivo = true;
