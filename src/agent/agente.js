@@ -35,7 +35,66 @@ async function dispararAlertaCritico(chave, titulo, mensagem) {
   }
 }
 
-const sessoes = new Map();
+const fs   = require('fs');
+const path = require('path');
+
+// ── Persistência simples de sessões em arquivo JSON ────────────
+// Evita perder o histórico de conversa de todo mundo a cada redeploy.
+function getSessoesFilePath() {
+  return path.resolve(process.env.SESSOES_FILE_PATH || './data/sessoes.json');
+}
+
+function carregarSessoesDoDisco() {
+  try {
+    const arquivo = getSessoesFilePath();
+    if (!fs.existsSync(arquivo)) {
+      console.log('[Sessoes] Nenhum arquivo de sessões anterior encontrado, começando do zero.');
+      return new Map();
+    }
+    const raw = fs.readFileSync(arquivo, 'utf-8');
+    const obj = JSON.parse(raw);
+    const mapa = new Map(Object.entries(obj));
+    console.log(`[Sessoes] Carregadas ${mapa.size} sessões do disco.`);
+    return mapa;
+  } catch (err) {
+    console.error('[Sessoes] Erro ao carregar sessões do disco, começando do zero:', err.message);
+    return new Map();
+  }
+}
+
+let _salvandoSessoes = false;
+let _salvamentoPendente = false;
+
+function salvarSessoesNoDisco() {
+  // Debounce simples: evita salvar em disco a cada mensagem isoladamente
+  // se várias chamadas vierem em sequência rápida.
+  if (_salvandoSessoes) {
+    _salvamentoPendente = true;
+    return;
+  }
+  _salvandoSessoes = true;
+
+  setTimeout(() => {
+    try {
+      const arquivo = getSessoesFilePath();
+      const dir = path.dirname(arquivo);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+      const obj = Object.fromEntries(sessoes);
+      fs.writeFileSync(arquivo, JSON.stringify(obj), 'utf-8');
+    } catch (err) {
+      console.error('[Sessoes] Erro ao salvar sessões no disco:', err.message);
+    } finally {
+      _salvandoSessoes = false;
+      if (_salvamentoPendente) {
+        _salvamentoPendente = false;
+        salvarSessoesNoDisco();
+      }
+    }
+  }, 500);
+}
+
+const sessoes = carregarSessoesDoDisco();
 
 function getSessao(numero) {
   if (!sessoes.has(numero)) {
@@ -49,6 +108,7 @@ function getSessao(numero) {
       endereco: null,
       frete: null
     });
+    salvarSessoesNoDisco();
   }
   return sessoes.get(numero);
 }
@@ -362,6 +422,10 @@ function buildSystemPrompt(foraDoHorario = false, msgHorario = "") {
 
   return `Você é o Luiz, vendedor da loja. Não é um robô, não é um agente — é o Luiz mesmo.
 
+⚠️ REGRA MÁXIMA PRIORIDADE — LEIA ANTES DE QUALQUER OUTRA COISA:
+Qualquer pergunta sobre produto, preço, ou disponibilidade ("tem X?", "qual o preço de Y?", "manda a tabela de Z") EXIGE chamar a ferramenta buscar_produto, consultar_estoque ou enviar_catalogo ANTES de responder qualquer coisa pro cliente. Você NUNCA responde de cabeça sobre preço ou estoque sem checar a ferramenta primeiro, mesmo que ache que sabe a resposta.
+PROIBIDO terminantemente dizer frases como "problema no sistema", "já resolvo isso", "tá com erro aqui" ou qualquer desculpa genérica sobre dificuldade técnica — isso nunca é uma resposta válida pro cliente. Se uma ferramenta retornar erro, tenta de novo ou aciona o Luiz humano com o motivo real, mas nunca inventa desculpa vaga de sistema.
+
 PERSONALIDADE:
 - Linguagem carioca, urbana, descontraída. Sem formalidade nenhuma.
 - Usa: opa, bora, fechou, partiu, pra cima, ai papaiii, boa garotão, masss rapazzz, c é loko, tá blz, tá legal
@@ -381,11 +445,12 @@ PERSONALIDADE:
 - Nunca expõe a própria mecânica interna pro cliente (não diz "vi no catálogo", "no meu sistema tem", "deixa eu checar minha lista" — fala como se simplesmente soubesse, naturalmente)
 - "vc é fechamento" só com clientes conhecidos
 - IDENTIDADE: se o cliente perguntar, estranhar, ou suspeitar que está falando com IA/robô/outra pessoa: responde que é o assistente do Luiz. Nunca nega ser um assistente, mas também nunca afirma tecnicamente "sou uma inteligência artificial" — fala de forma natural, como "sou o assistente dele aqui" ou similar.
-- EMOJIS: o Luiz é homem, e usa emoji com função, não por hábito. NUNCA usa carinha sorridente (😄😊🙂) ou emojis de "fofura"/felicidade genérica — isso não é como homem fala. Usa emoji só quando ele representa algo concreto na frase: motoboy saindo pra entrega (🛵), endereço/casa (🏠), brincadeira tipo "saiu o foguete" (🚀), dinheiro fechado (💰), alguma risada genuína de algo engraçado que o cliente falou (aí pode um 😂 ou 🤣 pontual, nunca repetido). Na duvida, não usa emoji nenhum — é melhor a mensagem ficar seca do que ter emoji forçado ou fora de contexto.
+- EMOJIS: o Luiz é homem, não usa carinha sorridente (😄😊🙂) ou emoji de "fofura"/felicidade genérica repetido toda hora — isso não é como homem fala. Mas pode e deve usar emoji ocasionalmente pra dar vida à conversa, sempre variando e nunca repetindo o mesmo em sequência: motoboy saindo pra entrega (🛵), endereço/casa (🏠), empolgação tipo "saiu o foguete" (🚀), dinheiro fechado (💰), riso genuíno de algo engraçado (😂🤣), aprovação (👍💪), e outros que façam sentido na frase. Não precisa emoji em toda mensagem, mas também não precisa zerar — só evita ser repetitivo ou colocar emoji de carinha feliz sem motivo.
 
 CONHECIMENTO:
 - Expert em hormônios, suplementos e peptídeos
 - Conhece profundamente: testosterona, primobolan, masteron, trembolona, deca, oxandrolona, GH, peptídeos (GHK-Cu, BPC-157, TB500, Ipamorelin etc), clembuterol, tirzepatida, retatrutida, ozempic
+- "Trembo" é como os clientes chamam Trembolona no diminutivo — entende e usa esse termo naturalmente quando fizer sentido na conversa.
 - Sabe sobre organismo masculino e feminino, ciclos, protocolos, efeitos colaterais, pós-ciclo
 - Para mulheres: sabe que Masteron preserva feminilidade, Primobolan é mais seguro, doses menores
 
@@ -397,6 +462,10 @@ EFEITOS COLATERAIS RELATADOS (de qualquer produto, ex: queda de cabelo, retenç�
 - Identifica o efeito mais provável daquele composto específico (cada hormônio tem efeitos diferentes: aromatização, androgenicidade, etc) e explica de forma tranquila, sem alarmar.
 - Sugere fazer exames pra identificar o que está acontecendo e ajustar.
 - Se for relato de masculinização em mulher (ex: aumento de clitóris, voz mais grave): trata com naturalidade, sem demonstrar preocupação exagerada, indica produto com menor risco androgênico (ex: Primobolan) e menciona a dose inicial segura pra esse caso.
+- Se for relato de espinha/acne (efeito colateral comum de androgênicos): explica que é normal acontecer, e menciona o Roacutan como produto vendido justamente pra isso, com a dose: 1 comprimido por dia, 3x por semana (segunda, quarta e sexta).
+
+REMÉDIOS CONTROLADOS (que exigem receita, com parceria com farmácia pro cliente levar a receita e a loja entregar o produto):
+- Se o cliente perguntar sobre algum remédio controlado: NÃO explica a parte de "precisa de receita" ou "é controlado" — o cliente já sabe disso. Só aciona o Luiz humano pra ele explicar os detalhes específicos dessa negociação.
 
 USO PARA TERCEIROS (cliente perguntando sobre uso da mãe, pai, amigo etc):
 - Pode opinar e indicar produto normalmente, considerando o contexto (idade, condição, ex: menopausa).
@@ -961,17 +1030,22 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
     break;
   }
 
+  salvarSessoesNoDisco();
   return resposta || null;
 }
 
 // Chamado pelo handler.js quando detecta uma mensagem fromMe que NÃO foi
 // enviada pela própria IA (ou seja, o Luiz humano digitou manualmente do
 // WhatsApp dele direto pro cliente). Ativa/renova a pausa de 3 minutos.
-function registrarMensagemHumana(clienteNumero) {
+function registrarMensagemHumana(clienteNumero, textoLuiz = null) {
   const sessao = getSessao(clienteNumero);
   sessao.luizHumanoAtivo = true;
   sessao.luizHumanoUltimaMsg = Date.now();
+  if (textoLuiz) {
+    sessao.historico.push({ role: 'assistant', content: `[Luiz humano respondeu manualmente]: ${textoLuiz}` });
+  }
   console.log(`[Agente] Luiz humano respondeu manualmente para ${clienteNumero}, pausando IA por 3min.`);
+  salvarSessoesNoDisco();
 }
 
 module.exports = { processarMensagem, getSessao, registrarMensagemHumana };
