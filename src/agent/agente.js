@@ -688,6 +688,8 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
   }
 
   let resposta = null;
+  let tentativasDeResetCliente = 0;
+  const MAX_TENTATIVAS_RESET_CLIENTE = 2;
 
   while (true) {
     let resultado;
@@ -700,22 +702,11 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
         messages: sessao.historico
       });
     } catch (errApi) {
-      // PROTEÇÃO CONTRA HISTÓRICO CORROMPIDO:
-      // Se a API recusar a requisição por erro de estrutura (ex: tool_use
-      // sem tool_result de uma sessão antiga/corrompida), reseta o
-      // histórico desse cliente e tenta novamente do zero, ao invés de
-      // travar a conversa pra sempre.
-      const ehErroEstrutura = errApi?.status === 400 &&
-        (errApi?.error?.error?.type === 'invalid_request_error' || errApi?.error?.type === 'invalid_request_error');
-
-      if (ehErroEstrutura && sessao.historico.length > 1) {
-        console.error(`[Agente] Histórico corrompido para ${clienteNumero}, resetando sessão. Erro:`, errApi?.message || errApi);
-        sessao.historico = [{ role: 'user', content: mensagemTexto }];
-        continue;
-      }
-
-      // CRÉDITOS ESGOTADOS: erro 400 (invalid_request_error sobre billing)
-      // ou 403/429 dependendo de como a Anthropic sinaliza saldo zerado.
+      // IMPORTANTE: checa crédito esgotado ANTES de histórico corrompido,
+      // porque os dois retornam o MESMO status HTTP (400). Resetar
+      // histórico não resolve falta de crédito, e fazer isso mascarava
+      // o problema real (visto em produção: ficava "resetando" repetido
+      // quando na verdade já tinha estourado o saldo).
       const errType = errApi?.error?.error?.type || errApi?.error?.type || '';
       const errMsg  = (errApi?.error?.error?.message || errApi?.message || '').toLowerCase();
       const ehSemCredito =
@@ -729,6 +720,33 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
           'Créditos da Anthropic esgotados!',
           'O agente parou de responder porque os créditos da conta Anthropic acabaram. Acessa console.anthropic.com e recarrega pra voltar a funcionar.'
         );
+        throw errApi;
+      }
+
+      // PROTEÇÃO CONTRA HISTÓRICO CORROMPIDO:
+      // Se a API recusar a requisição por erro de estrutura (ex: tool_use
+      // sem tool_result de uma sessão antiga/corrompida), reseta o
+      // histórico desse cliente e tenta novamente do zero, ao invés de
+      // travar a conversa pra sempre.
+      const ehErroEstrutura = errApi?.status === 400 &&
+        (errApi?.error?.error?.type === 'invalid_request_error' || errApi?.error?.type === 'invalid_request_error');
+
+      if (ehErroEstrutura && tentativasDeResetCliente < MAX_TENTATIVAS_RESET_CLIENTE) {
+        tentativasDeResetCliente++;
+        console.error(`[Agente] Histórico corrompido para ${clienteNumero}, resetando sessão (tentativa ${tentativasDeResetCliente}/${MAX_TENTATIVAS_RESET_CLIENTE}). Erro:`, errApi?.message || errApi);
+        sessao.historico = [{ role: 'user', content: mensagemTexto }];
+        // CRÍTICO: salva o reset em disco IMEDIATAMENTE, mesmo que essa
+        // tentativa ainda venha a falhar de novo — evita que o histórico
+        // corrompido fique travado pra sempre e gere loop de erro
+        // consumindo crédito sem nunca responder o cliente.
+        salvarSessoesNoDisco();
+        continue;
+      }
+
+      if (ehErroEstrutura) {
+        console.error(`[Agente] Esgotadas as tentativas de reset para ${clienteNumero}. Zerando histórico por segurança.`);
+        sessao.historico = [];
+        salvarSessoesNoDisco();
       }
 
       console.error('[Agente] Erro irrecuperável na API:', errApi);
