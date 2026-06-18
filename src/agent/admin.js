@@ -4,10 +4,56 @@
 
 const Anthropic = require('@anthropic-ai/sdk');
 const estoque   = require('../stock/estoque');
+const catalogo  = require('../stock/catalogo');
 const { adicionarApelidos, removerApelidos, verApelidos, listarTodosApelidos } = require('../stock/apelidos');
 const { adicionarContato, removerContato, listarContatos } = require('../stock/contatos');
+const fs   = require('fs');
+const path = require('path');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+// ── Persistência do estado administrativo (regras, bloqueios, etc) ──
+// Tudo isso precisa sobreviver a redeploys, senão toda mudança que o
+// Luiz humano fizer pelo Admin se perde na próxima vez que subirmos
+// código novo.
+function getEstadoAdminFilePath() {
+  return path.resolve(process.env.ESTADO_ADMIN_FILE_PATH || './data/estado-admin.json');
+}
+
+function carregarEstadoAdminDoDisco() {
+  try {
+    const arquivo = getEstadoAdminFilePath();
+    if (!fs.existsSync(arquivo)) return null;
+    const raw = fs.readFileSync(arquivo, 'utf-8');
+    const dados = JSON.parse(raw);
+    return {
+      numerosBloqueados: new Set(dados.numerosBloqueados || []),
+      gruposBloqueados: new Set(dados.gruposBloqueados || []),
+      regrasExtras: dados.regrasExtras || { texto: '' },
+      clientesEspeciais: dados.clientesEspeciais || {},
+    };
+  } catch (err) {
+    console.error('[Admin] Erro ao carregar estado administrativo do disco:', err.message);
+    return null;
+  }
+}
+
+function salvarEstadoAdminNoDisco() {
+  try {
+    const arquivo = getEstadoAdminFilePath();
+    const dir = path.dirname(arquivo);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const dados = {
+      numerosBloqueados: Array.from(_refs.numerosBloqueados || []),
+      gruposBloqueados: Array.from(_refs.gruposBloqueados || []),
+      regrasExtras: _refs.regrasExtras || { texto: '' },
+      clientesEspeciais: _refs.clientesEspeciais || {},
+    };
+    fs.writeFileSync(arquivo, JSON.stringify(dados, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('[Admin] Erro ao salvar estado administrativo no disco:', err.message);
+  }
+}
 
 // ── Estado compartilhado em memória (referências injetadas pelo handler) ──
 // O handler.js passa essas funções/dados na inicialização porque o admin
@@ -22,13 +68,31 @@ let _refs = {
   pedidosDoDia: [],          // [{ hora, cliente, itens, total, tipo }]
 };
 
+// Ao registrar as referências vindas do handler.js, mescla com o que já
+// foi salvo em disco anteriormente — assim, números bloqueados e regras
+// extras configuradas antes de um redeploy não se perdem.
 function registrarReferencias(refs) {
+  const salvo = carregarEstadoAdminDoDisco();
   _refs = { ..._refs, ...refs };
+
+  if (salvo) {
+    if (salvo.numerosBloqueados.size && _refs.numerosBloqueados) {
+      salvo.numerosBloqueados.forEach(n => _refs.numerosBloqueados.add(n));
+    }
+    if (salvo.gruposBloqueados.size && _refs.gruposBloqueados) {
+      salvo.gruposBloqueados.forEach(g => _refs.gruposBloqueados.add(g));
+    }
+    if (salvo.regrasExtras?.texto) {
+      _refs.regrasExtras = salvo.regrasExtras;
+    }
+    if (salvo.clientesEspeciais && Object.keys(salvo.clientesEspeciais).length) {
+      _refs.clientesEspeciais = { ..._refs.clientesEspeciais, ...salvo.clientesEspeciais };
+    }
+    console.log('[Admin] Estado administrativo restaurado do disco (regras, bloqueios, clientes especiais).');
+  }
 }
 
 // ── Histórico de conversa do grupo admin (persistido em disco) ───
-const fs   = require('fs');
-const path = require('path');
 
 function getHistoricoAdminFilePath() {
   return path.resolve(process.env.ADMIN_HISTORICO_FILE_PATH || './data/historico-admin.json');
@@ -71,6 +135,13 @@ function buildSystemPromptAdmin() {
 ⚠️ REGRA MÁXIMA PRIORIDADE:
 Qualquer pergunta sobre estoque, produto, preço, pedido ou vendas EXIGE chamar a ferramenta correspondente (consultar_estoque_completo, consultar_produto, consultar_pedidos_dia, etc) ANTES de responder qualquer coisa. PROIBIDO terminantemente inventar frases como "endpoint falhou", "problema no sistema", "erro de conexão" ou qualquer desculpa técnica vaga — isso nunca é uma resposta válida. Se uma ferramenta retornar erro de verdade, explica o erro REAL que ela retornou, nunca um erro genérico inventado.
 
+⚠️ FONTE DE PREÇO DE VENDA — ATENÇÃO MÁXIMA:
+O preço de venda que vai pro cliente é SEMPRE o que está no catálogo (categorias gerenciadas por substituir_categoria_catalogo, marcar_produto_falta, ver_catalogo_categoria). A planilha de estoque (ferramentas de entrada/saída/consultar_estoque) serve SÓ pra controle de quantidade física e gerar o relatório diário de vendas — o preço que está nela é de controle interno, NUNCA é o preço de venda. Se o Luiz mandar atualização de preço, isso vai pro catálogo, nunca confundir com a planilha.
+Existem DOIS catálogos separados: o catálogo normal (cliente final) e o catálogo de revenda (preço diferenciado pra revendedor). Use o catálogo de revenda só quando o Luiz disser explicitamente algo como "responde como preço de revenda" ou "isso é pra revendedor".
+
+ÁUDIO:
+Você NÃO ouve nem transcreve áudio. Se o Luiz mandar um áudio, avise educadamente que não consegue ouvir e peça pra ele escrever a mensagem.
+
 QUEM FALA COM VOCÊ:
 - Só o Luiz humano (ou pessoas de confiança dele) estão neste grupo.
 - Trate como conversa de gestão: direto, sem rodeios, sem precisar ser "simpático" do jeito do agente de vendas.
@@ -78,30 +149,34 @@ QUEM FALA COM VOCÊ:
 
 O QUE VOCÊ PODE FAZER (use as ferramentas disponíveis):
 1. Bloquear/desbloquear números de telefone e grupos de WhatsApp — o agente de vendas (Luiz IA) nunca responde quem está bloqueado.
-2. Consultar e editar estoque: ver produtos, quantidades, preços; dar entrada ou saída manual.
-3. Consultar pedidos/vendas do dia, histórico de vendas.
-4. Ajustar regras e comportamento do Luiz vendedor (tom de voz, frases proibidas, novas instruções) — isso se aplica em tempo real na próxima mensagem que ele responder.
-5. Gerenciar clientes especiais: desconto fixo, marcar como VIP, adicionar observações sobre o cliente.
-6. Gerenciar grupos de revendedores: adicionar novo grupo de revendedor, remover, listar.
-7. Gerar relatórios simples: vendas do dia, produtos mais vendidos, estoque baixo.
-8. Adicionar/remover apelidos de produtos.
-9. Adicionar/remover clientes da whitelist de atendimento.
+2. Consultar e editar ESTOQUE (quantidade física, não preço de venda): ver produtos, quantidades; dar entrada ou saída manual.
+3. Editar o CATÁLOGO de preço de venda (cliente final e revenda): substituir tabela de uma categoria inteira, marcar item específico em/fora de falta, ver ou listar categorias.
+4. Consultar pedidos/vendas do dia, histórico de vendas.
+5. Ajustar regras e comportamento do Luiz vendedor (tom de voz, frases ou emojis proibidos, novas instruções) — isso se aplica em tempo real na próxima mensagem que ele responder.
+6. Gerenciar clientes especiais: desconto fixo, marcar como VIP, adicionar observações sobre o cliente.
+7. Gerenciar grupos de revendedores: adicionar novo grupo de revendedor, remover, listar.
+8. Gerar relatórios simples: vendas do dia, produtos mais vendidos, estoque baixo.
+9. Adicionar/remover apelidos de produtos.
+10. Adicionar/remover clientes da whitelist de atendimento.
 
 COMO INTERPRETAR PEDIDOS:
 - O Luiz vai falar de forma natural, não em comandos formais. Exemplos e como tratar:
   - "não responde mais esse número 987655909" → bloquear_numero
   - "desbloqueia o numero X" → desbloquear_numero
   - "esse grupo aqui não é pra ela responder" / cita nome de grupo → se a mensagem do Luiz tiver a marcação "[MENSAGEM ENCAMINHADA DE OUTRO CHAT — JID de origem: ...]" no início, use esse JID direto na ferramenta bloquear_grupo, sem precisar perguntar nada. Se não tiver essa marcação, peça pro Luiz encaminhar (forward) qualquer mensagem do grupo que ele quer bloquear direto pra esse chat — não peça "o JID" porque ele pode não saber o que é isso.
-  - "Primobolan tá em falta" / "acabou o X" → dar_saida_manual ou avisar pra zerar estoque
-  - "atualiza o preço da Trembolona pra 220" → atualizar_preco
+  - "Primobolan tá em falta" / "acabou o X" → marcar_produto_falta (catálogo, NÃO é saída de estoque)
+  - "chegou de novo o X" → marcar_produto_falta com emFalta: false
+  - "atualiza o preço da Trembolona Lander Land pra 220" → marcar_produto_falta ou substituir_categoria_catalogo, dependendo se é um item específico ou a tabela inteira mudou — SEMPRE no catálogo, nunca atualizar_preco (essa é só pra controle de estoque interno)
+  - "manda essa tabela nova pra substituir Deca" (e cola texto) → substituir_categoria_catalogo
+  - "isso é preço de revenda" / "responde como revendedor" → use a versão de revenda das ferramentas de catálogo quando disponível, ou avise no campo correto
   - "Cliente Monique tem desconto de 10%" → definir_desconto_cliente
   - "marca o João como VIP" → marcar_cliente_vip
-  - "o Luiz (IA) não pode falar 'mano' nunca mais" / qualquer ajuste de tom → atualizar_regra_luiz
+  - "o Luiz (IA) não pode falar 'mano' nunca mais" / "proíbe esse emoji ⚠️" / qualquer ajuste de tom, palavra ou emoji proibido → atualizar_regra_luiz
   - "como tá o estoque?" / "quanto vendeu hoje?" → usar ferramentas de consulta e responder com os dados
   - "cria um grupo novo de revendedor, nome Pedro, jid tal" → adicionar_grupo_revendedor
 - Se a intenção estiver clara, EXECUTE a ferramenta direto e confirme o que foi feito. Não fique pedindo confirmação extra para ações simples e reversíveis (bloqueio, preço, desconto).
 - Se faltar informação crítica (ex: qual número bloquear, qual produto, qual valor), pergunte só o que falta, de forma curta.
-- Sempre que uma ação for executada, responda confirmando objetivamente o que mudou. Ex: "Bloqueado! Esse número não recebe mais resposta." ou "Preço da Trembolona Lander Land atualizado pra R$220."
+- Sempre que uma ação for executada, responda confirmando objetivamente o que mudou. Ex: "Bloqueado! Esse número não recebe mais resposta." ou "Preço da Trembolona Lander Land atualizado no catálogo."
 
 IMPORTANTE:
 - Nunca minta sobre uma ação ter sido feita. Só confirme depois que a ferramenta retornar sucesso.
@@ -128,6 +203,86 @@ const TOOLS_ADMIN = [
       },
       required: ['mes']
     }
+  },
+  {
+    name: 'substituir_categoria_catalogo',
+    description: 'Substitui o texto completo de uma categoria do catálogo de produtos (ex: quando o Luiz humano manda uma tabela nova pronta, com preços atualizados, pra substituir a categoria de durateston, masteron, etc). Cria a categoria se ela ainda não existir.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        categoria: { type: 'string', description: 'Nome da categoria (ex: durateston, masteron, enantato, deca, trembolona, oxandrolona, primobolan, peptideos, gh, emagrecedores, ou uma categoria nova)' },
+        textoNovo: { type: 'string', description: 'Texto completo da tabela pronta, no mesmo estilo/formatação das tabelas existentes' }
+      },
+      required: ['categoria', 'textoNovo']
+    }
+  },
+  {
+    name: 'marcar_produto_falta',
+    description: 'Marca ou desmarca um item específico (uma marca/variação dentro de uma categoria) como em falta no catálogo. Use quando o Luiz humano falar que acabou ou que chegou de novo um produto específico (ex: "acabou o Masteron Swiss", "chegou Durateston Cooper de novo").',
+    input_schema: {
+      type: 'object',
+      properties: {
+        categoria: { type: 'string', description: 'Categoria do produto (ex: masteron, durateston)' },
+        trechoNomeItem: { type: 'string', description: 'Trecho específico do nome do item pra identificar a linha certa (ex: "Propionato - Swiss" em vez de só "Swiss", pra evitar ambiguidade entre variações da mesma marca)' },
+        emFalta: { type: 'boolean', description: 'true para marcar como em falta, false para remover a marcação (voltou ao estoque)' }
+      },
+      required: ['categoria', 'trechoNomeItem', 'emFalta']
+    }
+  },
+  {
+    name: 'ver_catalogo_categoria',
+    description: 'Mostra o texto completo atual de uma categoria do catálogo, útil pro Luiz humano confirmar o que está cadastrado antes de editar.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        categoria: { type: 'string' }
+      },
+      required: ['categoria']
+    }
+  },
+  {
+    name: 'listar_categorias_catalogo',
+    description: 'Lista todas as categorias de produto disponíveis no catálogo atual (preço de cliente final, não revenda).',
+    input_schema: { type: 'object', properties: {}, required: [] }
+  },
+  {
+    name: 'substituir_categoria_catalogo_revenda',
+    description: 'Substitui o texto completo de uma categoria no CATÁLOGO DE REVENDA (preço diferenciado pra revendedor, separado do catálogo de cliente final). Use quando o Luiz humano mandar uma tabela de preço específica pra revendedor.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        categoria: { type: 'string', description: 'Nome da categoria (ex: durateston, masteron, etc)' },
+        textoNovo: { type: 'string', description: 'Texto completo da tabela de revenda pronta' }
+      },
+      required: ['categoria', 'textoNovo']
+    }
+  },
+  {
+    name: 'marcar_produto_falta_revenda',
+    description: 'Marca ou desmarca um item específico como em falta no CATÁLOGO DE REVENDA (separado do catálogo de cliente final).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        categoria: { type: 'string' },
+        trechoNomeItem: { type: 'string', description: 'Trecho específico do nome do item pra identificar a linha certa' },
+        emFalta: { type: 'boolean' }
+      },
+      required: ['categoria', 'trechoNomeItem', 'emFalta']
+    }
+  },
+  {
+    name: 'ver_catalogo_categoria_revenda',
+    description: 'Mostra o texto completo atual de uma categoria do CATÁLOGO DE REVENDA (preço de revendedor, separado do catálogo de cliente final).',
+    input_schema: {
+      type: 'object',
+      properties: { categoria: { type: 'string' } },
+      required: ['categoria']
+    }
+  },
+  {
+    name: 'listar_categorias_catalogo_revenda',
+    description: 'Lista todas as categorias de produto disponíveis no CATÁLOGO DE REVENDA (preço de revendedor).',
+    input_schema: { type: 'object', properties: {}, required: [] }
   },
   {
     name: 'bloquear_numero',
@@ -330,15 +485,55 @@ async function executarFerramentaAdmin(nome, input) {
       return { resultado };
     }
 
+    case 'substituir_categoria_catalogo': {
+      const resultado = catalogo.definirCategoria(input.categoria, input.textoNovo);
+      return { resultado };
+    }
+
+    case 'marcar_produto_falta': {
+      const resultado = catalogo.marcarItemFalta(input.categoria, input.trechoNomeItem, input.emFalta);
+      return { resultado };
+    }
+
+    case 'ver_catalogo_categoria': {
+      const texto = catalogo.getCategoria(input.categoria);
+      return { resultado: texto || `Categoria "${input.categoria}" não encontrada.` };
+    }
+
+    case 'listar_categorias_catalogo': {
+      return { resultado: catalogo.listarCategorias() };
+    }
+
+    case 'substituir_categoria_catalogo_revenda': {
+      const resultado = catalogo.definirCategoria(input.categoria, input.textoNovo, 'revenda');
+      return { resultado };
+    }
+
+    case 'marcar_produto_falta_revenda': {
+      const resultado = catalogo.marcarItemFalta(input.categoria, input.trechoNomeItem, input.emFalta, 'revenda');
+      return { resultado };
+    }
+
+    case 'ver_catalogo_categoria_revenda': {
+      const texto = catalogo.getCategoria(input.categoria, 'revenda');
+      return { resultado: texto || `Categoria "${input.categoria}" não encontrada no catálogo de revenda.` };
+    }
+
+    case 'listar_categorias_catalogo_revenda': {
+      return { resultado: catalogo.listarCategorias('revenda') };
+    }
+
     case 'bloquear_numero': {
       const n = limparNumeroAdmin(input.numero);
       _refs.numerosBloqueados?.add(n);
+      salvarEstadoAdminNoDisco();
       return { resultado: { ok: true, numero: n } };
     }
 
     case 'desbloquear_numero': {
       const n = limparNumeroAdmin(input.numero);
       const existia = _refs.numerosBloqueados?.delete(n);
+      salvarEstadoAdminNoDisco();
       return { resultado: { ok: !!existia, numero: n } };
     }
 
@@ -356,6 +551,7 @@ async function executarFerramentaAdmin(nome, input) {
       if (_refs.gruposRevendedores && _refs.gruposRevendedores[input.jid]) {
         delete _refs.gruposRevendedores[input.jid];
       }
+      salvarEstadoAdminNoDisco();
       return { resultado: { ok: true, jid: input.jid } };
     }
 
@@ -392,6 +588,7 @@ async function executarFerramentaAdmin(nome, input) {
 
     case 'atualizar_regra_luiz': {
       _refs.regrasExtras.texto = (_refs.regrasExtras.texto + '\n- ' + input.regra).trim();
+      salvarEstadoAdminNoDisco();
       return { resultado: { ok: true, regrasAtuais: _refs.regrasExtras.texto } };
     }
 
@@ -401,18 +598,21 @@ async function executarFerramentaAdmin(nome, input) {
 
     case 'limpar_regras_luiz': {
       _refs.regrasExtras.texto = '';
+      salvarEstadoAdminNoDisco();
       return { resultado: { ok: true } };
     }
 
     case 'definir_desconto_cliente': {
       const n = limparNumeroAdmin(input.numero);
       _refs.clientesEspeciais[n] = { ..._refs.clientesEspeciais[n], desconto: input.descontoPercentual };
+      salvarEstadoAdminNoDisco();
       return { resultado: { ok: true, numero: n, desconto: input.descontoPercentual } };
     }
 
     case 'marcar_cliente_vip': {
       const n = limparNumeroAdmin(input.numero);
       _refs.clientesEspeciais[n] = { ..._refs.clientesEspeciais[n], vip: true };
+      salvarEstadoAdminNoDisco();
       return { resultado: { ok: true, numero: n } };
     }
 
@@ -421,6 +621,7 @@ async function executarFerramentaAdmin(nome, input) {
       const atual = _refs.clientesEspeciais[n] || {};
       const obsAtuais = atual.observacoes || [];
       _refs.clientesEspeciais[n] = { ...atual, observacoes: [...obsAtuais, input.observacao] };
+      salvarEstadoAdminNoDisco();
       return { resultado: { ok: true, numero: n } };
     }
 
@@ -455,14 +656,19 @@ async function executarFerramentaAdmin(nome, input) {
 }
 
 // ── Loop principal do agente administrativo ───────────────────
-async function processarMensagemAdmin(textoMensagem) {
-  historicoAdmin.push({ role: 'user', content: textoMensagem });
+async function processarMensagemAdmin(textoMensagem, conteudoMultimodal = null) {
+  // Se vier conteúdo multimodal (ex: imagem em base64), usa ele como o
+  // "content" da mensagem em vez do texto puro — a API da Anthropic lê
+  // imagem nativamente nesse formato.
+  historicoAdmin.push({ role: 'user', content: conteudoMultimodal || textoMensagem });
 
   if (historicoAdmin.length > 60) {
     historicoAdmin = historicoAdmin.slice(-60);
   }
 
   let resposta = null;
+  let tentativasDeReset = 0;
+  const MAX_TENTATIVAS_RESET = 2; // limite de segurança pra nunca entrar em loop infinito
 
   while (true) {
     let resultado;
@@ -477,10 +683,28 @@ async function processarMensagemAdmin(textoMensagem) {
     } catch (errApi) {
       console.error('[Admin] ERRO BRUTO da API Anthropic:', JSON.stringify(errApi?.error || errApi?.message || errApi), '| status:', errApi?.status);
       const ehErroEstrutura = errApi?.status === 400;
-      if (ehErroEstrutura && historicoAdmin.length > 1) {
-        console.error('[Admin] Histórico corrompido, resetando. Erro:', errApi?.message || errApi);
-        historicoAdmin = [{ role: 'user', content: textoMensagem }];
+
+      if (ehErroEstrutura && tentativasDeReset < MAX_TENTATIVAS_RESET) {
+        tentativasDeReset++;
+        console.error(`[Admin] Histórico corrompido, resetando (tentativa ${tentativasDeReset}/${MAX_TENTATIVAS_RESET}). Erro:`, errApi?.message || errApi);
+        historicoAdmin = [{ role: 'user', content: conteudoMultimodal || textoMensagem }];
+        // CRÍTICO: salva o reset em disco IMEDIATAMENTE, mesmo que essa
+        // tentativa ainda venha a falhar de novo. Isso impede que o
+        // histórico corrompido fique permanentemente travado em disco
+        // e continue dando erro pra sempre em mensagens futuras —
+        // foi exatamente isso que causou o gasto de crédito em loop.
+        salvarHistoricoAdminNoDisco();
         continue;
+      }
+
+      // Esgotou as tentativas de reset, ou não é erro de estrutura.
+      // Em qualquer um dos casos, garante que o que está em disco
+      // não fica travado: zera o histórico antes de propagar o erro,
+      // pra próxima mensagem já começar limpa.
+      if (ehErroEstrutura) {
+        console.error('[Admin] Esgotadas as tentativas de reset. Zerando histórico por segurança.');
+        historicoAdmin = [];
+        salvarHistoricoAdminNoDisco();
       }
       throw errApi;
     }
