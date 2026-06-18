@@ -1,12 +1,15 @@
 // src/webhook/handler.js
 // Recebe eventos da Evolution API e roteia para o agente
 
-const { processarMensagem, getSessao, registrarMensagemHumana } = require('../agent/agente');
-const { enviarTexto, marcarComoLida, digitando } = require('./evolution');
+const { processarMensagem, getSessao, registrarMensagemHumana, getClienteDoAviso, processarRespostaLuizParaCliente } = require('../agent/agente');
+const { enviarTexto, marcarComoLida, marcarComoNaoLida, digitando } = require('./evolution');
 const { isAutorizado, adicionarContato, removerContato } = require('../stock/contatos');
 const { adicionarApelidos, removerApelidos, verApelidos, listarTodosApelidos } = require('../stock/apelidos');
-const { transcreverAudioBase64, transcreverAudioUrl } = require('./transcricao');
+// Transcrição de áudio desativada — agora a IA avisa que não pode ouvir
+// áudio e pede pra escrever, em vez de tentar transcrever (ver extrairTexto).
+// const { transcreverAudioBase64, transcreverAudioUrl } = require('./transcricao');
 const adminAgent = require('../agent/admin');
+const midiaAdmin = require('./midia-admin');
 
 const OWNER        = process.env.OWNER_NUMBER;
 const ADMIN_JID    = process.env.ADMIN_GROUP_JID;
@@ -385,6 +388,22 @@ async function handleGrupoAdmin(mensagem, remoteJid) {
       return;
     }
 
+    // ── Detecta REPLY (citação) numa mensagem de aviso anterior ────
+    // Se o Luiz humano respondeu (reply) em cima de uma mensagem de
+    // "Atenção Luiz!" que o sistema mandou sobre um cliente específico,
+    // repassa a resposta dele direto pro cliente, sem precisar passar
+    // pelo agente administrativo genérico.
+    const stanzaId = mensagem?.contextInfo?.stanzaId || mensagem?.message?.contextInfo?.stanzaId;
+    if (stanzaId) {
+      const avisoEncontrado = getClienteDoAviso(stanzaId);
+      if (avisoEncontrado) {
+        console.log(`[Admin] Reply detectado! Repassando resposta do Luiz pro cliente ${avisoEncontrado.clienteNumero}`);
+        await processarRespostaLuizParaCliente(avisoEncontrado.clienteNumero, avisoEncontrado.clienteNome, textoMensagem);
+        await enviarTexto(remoteJid, `✅ Repassei pro ${avisoEncontrado.clienteNome || avisoEncontrado.clienteNumero}!`);
+        return;
+      }
+    }
+
     // ── Detecta mensagem encaminhada (forward) e captura o JID
     // de origem, pra permitir bloquear um grupo sem o Luiz humano
     // precisar saber o que é JID.
@@ -396,22 +415,60 @@ async function handleGrupoAdmin(mensagem, remoteJid) {
       console.log(`[Admin] Forward detectado, JID de origem: ${jidOrigemForward}`);
     }
 
+    // ── Detecta imagem, PDF ou planilha mandados no Admin ──────────
+    // Permite o Luiz humano mandar foto de comprovante/tabela, PDF ou
+    // planilha que o sistema lê o conteúdo de fato, em vez de só
+    // registrar "[DOCUMENTO ENVIADO]" genérico.
+    const legendaOuTexto = textoMensagem?.startsWith('[') ? null : textoMensagem;
+    let conteudoMultimodal = null;
+
+    const conteudoImagem = midiaAdmin.montarConteudoImagem(mensagem, legendaOuTexto);
+    if (conteudoImagem) {
+      conteudoMultimodal = conteudoImagem;
+      console.log('[Admin] Imagem detectada, montando conteúdo multimodal.');
+    }
+
+    if (!conteudoMultimodal) {
+      const conteudoPdf = await midiaAdmin.montarConteudoPdf(mensagem, legendaOuTexto);
+      if (conteudoPdf) {
+        conteudoMultimodal = conteudoPdf;
+        console.log('[Admin] PDF detectado, montando conteúdo multimodal.');
+      }
+    }
+
+    if (!conteudoMultimodal) {
+      const textoPlanilha = await midiaAdmin.montarConteudoPlanilha(mensagem, legendaOuTexto);
+      if (textoPlanilha) {
+        textoParaAgente = textoPlanilha;
+        console.log('[Admin] Planilha detectada, conteúdo extraído como texto.');
+      }
+    }
+
     console.log(`[Admin] Mensagem recebida: ${textoParaAgente}`);
 
     await digitando(remoteJid, 1500);
 
     console.log('[Admin] Chamando processarMensagemAdmin...');
-    const resposta = await adminAgent.processarMensagemAdmin(textoParaAgente);
+    const resposta = await adminAgent.processarMensagemAdmin(textoParaAgente, conteudoMultimodal);
     console.log('[Admin] Resposta recebida:', JSON.stringify(resposta));
 
     if (resposta) {
       const envio = await enviarTexto(remoteJid, resposta);
       console.log('[Admin] Resultado do envio:', JSON.stringify(envio));
-      if (envio?.messageId) registrarIdDaIA(envio.messageId);
+      if (envio?.messageId) {
+        registrarIdDaIA(envio.messageId);
+        // Marca o grupo Admin como não lido pra chamar atenção de que
+        // teve atividade nova. Se falhar, só loga — não interrompe o
+        // fluxo (a resposta já foi enviada com sucesso de qualquer forma).
+        const resultadoNaoLida = await marcarComoNaoLida(remoteJid, envio.messageId);
+        if (!resultadoNaoLida?.ok) {
+          console.error('[Admin] Não consegui marcar o grupo como não lido:', resultadoNaoLida?.erro);
+        }
+      }
     }
 
   } catch (err) {
-    console.error('[Webhook] Erro no grupo admin:', err);
+    console.error('[Webhook] Erro no grupo admin:', err?.message, err?.stack);
     try {
       await enviarTexto(remoteJid, '⚠️ Deu erro ao processar isso aqui, tenta de novo ou me chama.');
     } catch (_) {}
@@ -455,27 +512,13 @@ async function extrairTexto(mensagem) {
     return mensagem.message.extendedTextMessage.text;
   }
 
-  // ── Áudio: transcreve com Whisper antes de seguir ─────────
+  // ── Áudio: não tenta mais transcrever. A transcrição (Whisper) se
+  // mostrou pouco confiável em produção e gerava custo/erro sem entregar
+  // valor. Agora avisa direto que não pode ouvir e pede pra escrever —
+  // vale tanto pra clientes quanto pro grupo Admin, já que essa função
+  // é compartilhada por todos os fluxos.
   if (mensagem?.message?.audioMessage) {
-    const audioMsg  = mensagem.message.audioMessage;
-    const mimetype  = audioMsg?.mimetype || 'audio/ogg';
-    let transcricao = null;
-
-    // Caso 1: Webhook Base64 ligado — o áudio vem direto em base64
-    const base64Audio = mensagem?.message?.base64 || audioMsg?.base64 || mensagem?.base64;
-    if (base64Audio) {
-      transcricao = await transcreverAudioBase64(base64Audio, mimetype);
-    }
-    // Caso 2: vem como URL
-    else if (audioMsg?.url) {
-      transcricao = await transcreverAudioUrl(audioMsg.url);
-    }
-
-    if (transcricao) {
-      console.log('[Transcricao] Áudio transcrito:', transcricao);
-      return `[ÁUDIO TRANSCRITO]: ${transcricao}`;
-    }
-    return '[ÁUDIO ENVIADO — não foi possível transcrever]';
+    return '[ÁUDIO RECEBIDO — instrua a pessoa que você não pode ouvir áudios e peça pra ela escrever a mensagem, de forma natural e educada]';
   }
 
   if (mensagem?.message?.imageMessage) {
