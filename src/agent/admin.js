@@ -122,6 +122,7 @@ function salvarHistoricoAdminNoDisco() {
 }
 
 let historicoAdmin = carregarHistoricoAdminDoDisco();
+let _limparHistoricoAposResposta = false;
 
 function limparHistoricoAdmin() {
   historicoAdmin = [];
@@ -174,6 +175,7 @@ COMO INTERPRETAR PEDIDOS:
   - "o Luiz (IA) não pode falar 'mano' nunca mais" / "proíbe esse emoji ⚠️" / qualquer ajuste de tom, palavra ou emoji proibido → atualizar_regra_luiz
   - "como tá o estoque?" / "quanto vendeu hoje?" → usar ferramentas de consulta e responder com os dados
   - "cria um grupo novo de revendedor, nome Pedro, jid tal" → adicionar_grupo_revendedor
+  - "esquece a conversa" / "limpa o histórico" / "começa do zero" → limpar_historico_admin
 - Se a intenção estiver clara, EXECUTE a ferramenta direto e confirme o que foi feito. Não fique pedindo confirmação extra para ações simples e reversíveis (bloqueio, preço, desconto).
 - Se faltar informação crítica (ex: qual número bloquear, qual produto, qual valor), pergunte só o que falta, de forma curta.
 - Sempre que uma ação for executada, responda confirmando objetivamente o que mudou. Ex: "Bloqueado! Esse número não recebe mais resposta." ou "Preço da Trembolona Lander Land atualizado no catálogo."
@@ -282,6 +284,11 @@ const TOOLS_ADMIN = [
   {
     name: 'listar_categorias_catalogo_revenda',
     description: 'Lista todas as categorias de produto disponíveis no CATÁLOGO DE REVENDA (preço de revendedor).',
+    input_schema: { type: 'object', properties: {}, required: [] }
+  },
+  {
+    name: 'limpar_historico_admin',
+    description: 'Apaga o histórico da conversa atual do Admin, começando do zero. Use quando o Luiz humano pedir algo como "esquece a conversa", "limpa o histórico" ou "começa do zero" — serve pra reduzir custo, já que conversas longas ficam mais caras por mensagem.',
     input_schema: { type: 'object', properties: {}, required: [] }
   },
   {
@@ -523,6 +530,14 @@ async function executarFerramentaAdmin(nome, input) {
       return { resultado: catalogo.listarCategorias('revenda') };
     }
 
+    case 'limpar_historico_admin': {
+      // Marca pra limpar DEPOIS que a resposta atual for enviada e salva
+      // (ver processarMensagemAdmin) — assim a confirmação da própria
+      // ação ainda chega certinho pro Luiz antes do histórico zerar.
+      _limparHistoricoAposResposta = true;
+      return { resultado: { ok: true, mensagem: 'Histórico será limpo após esta resposta.' } };
+    }
+
     case 'bloquear_numero': {
       const n = limparNumeroAdmin(input.numero);
       _refs.numerosBloqueados?.add(n);
@@ -662,8 +677,8 @@ async function processarMensagemAdmin(textoMensagem, conteudoMultimodal = null) 
   // imagem nativamente nesse formato.
   historicoAdmin.push({ role: 'user', content: conteudoMultimodal || textoMensagem });
 
-  if (historicoAdmin.length > 60) {
-    historicoAdmin = historicoAdmin.slice(-60);
+  if (historicoAdmin.length > 30) {
+    historicoAdmin = historicoAdmin.slice(-30);
   }
 
   let resposta = null;
@@ -682,6 +697,30 @@ async function processarMensagemAdmin(textoMensagem, conteudoMultimodal = null) 
       });
     } catch (errApi) {
       console.error('[Admin] ERRO BRUTO da API Anthropic:', JSON.stringify(errApi?.error || errApi?.message || errApi), '| status:', errApi?.status);
+      // IMPORTANTE: "histórico corrompido" e "crédito esgotado" retornam
+      // o MESMO status HTTP (400) — precisa checar a mensagem real pra
+      // não confundir os dois. Resetar histórico não resolve falta de
+      // crédito, e fazer isso mascarava o problema real (visto no log
+      // de produção: ficava "resetando" repetidamente quando na
+      // verdade já tinha estourado o saldo).
+      const errType = errApi?.error?.error?.type || errApi?.error?.type || '';
+      const errMsgBruta = (errApi?.error?.error?.message || errApi?.message || '').toLowerCase();
+      const ehSemCredito =
+        errApi?.status === 400 && /credit|balance|billing/.test(errMsgBruta) ||
+        errApi?.status === 403 && /credit|balance/.test(errMsgBruta);
+
+      if (ehSemCredito) {
+        console.error('[Admin] CRÉDITOS ESGOTADOS na Anthropic:', errMsgBruta);
+        const grupoAdmin = process.env.ADMIN_GROUP_JID;
+        if (grupoAdmin) {
+          try {
+            const { enviarTexto } = require('../webhook/evolution');
+            await enviarTexto(grupoAdmin, '🚨 *Créditos da Anthropic esgotados!*\n\nAcessa console.anthropic.com e recarrega pra voltar a funcionar.');
+          } catch (_) {}
+        }
+        throw errApi;
+      }
+
       const ehErroEstrutura = errApi?.status === 400;
 
       if (ehErroEstrutura && tentativasDeReset < MAX_TENTATIVAS_RESET) {
@@ -754,6 +793,17 @@ async function processarMensagemAdmin(textoMensagem, conteudoMultimodal = null) 
   }
 
   salvarHistoricoAdminNoDisco();
+
+  // Se a ferramenta limpar_historico_admin foi chamada nesta rodada,
+  // limpa DEPOIS de já ter salvo a resposta atual — assim a confirmação
+  // ("histórico limpo!") chega normal pro Luiz antes de zerar tudo.
+  if (_limparHistoricoAposResposta) {
+    _limparHistoricoAposResposta = false;
+    historicoAdmin = [];
+    salvarHistoricoAdminNoDisco();
+    console.log('[Admin] Histórico limpo a pedido do Luiz humano.');
+  }
+
   return resposta || null;
 }
 
