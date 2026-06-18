@@ -683,8 +683,8 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
     sessao.historico.push({ role: "user", content: mensagemTexto });
   }
 
-  if (sessao.historico.length > 40) {
-    sessao.historico = sessao.historico.slice(-40);
+  if (sessao.historico.length > 30) {
+    sessao.historico = sessao.historico.slice(-30);
   }
 
   let resposta = null;
