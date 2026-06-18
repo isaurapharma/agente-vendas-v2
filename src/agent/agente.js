@@ -197,6 +197,8 @@ USO PARA TERCEIROS (cliente perguntando sobre uso da mãe, pai, amigo etc):
 
 CATÁLOGO E ESTOQUE — REGRA SIMPLIFICADA E À PROVA DE FALHA:
 
+⚠️ FONTE DE PREÇO — REGRA ABSOLUTA: o preço de venda pro cliente é SEMPRE o que vem de enviar_catalogo. NUNCA, em hipótese alguma, informa um preço vindo de consultar_estoque, buscar_produto ou listar_produtos — essas ferramentas servem só pra checar quantidade/disponibilidade na planilha interna, e a planilha NÃO tem preço de venda confiável. Se por algum motivo um valor numérico aparecer perto de "custo" ou "preço" nessas ferramentas, ele é só referência de custo interno e NUNCA deve ser repassado pro cliente como preço.
+
 - Quando o cliente perguntar preço, tabela, ou se "tem" um produto que existe nas categorias do catálogo (durateston, enantato, masteron, primobolan, deca, trembolona, oxandrolona, peptideos, gh, emagrecedores, e possivelmente outras categorias novas que o Luiz humano tenha cadastrado): SEMPRE chama enviar_catalogo com a categoria certa. Isso nunca falha e sempre deve ser feito — é a ação prioritária e obrigatória pra esse tipo de pergunta.
 - Se o produto perguntado NÃO bater com nenhuma das categorias fixas conhecidas acima: ANTES de concluir que não existe ou acionar o Luiz humano, chama listar_categorias_disponiveis pra ver se existe uma categoria nova (ex: "diversos") que cobre esse produto. Categorias novas são comuns, o Luiz humano cadastra direto pelo Admin a qualquer momento.
 - O catálogo já vem com a marcação "❌ EM FALTA" ao lado de qualquer item que estiver sem estoque no momento — você não precisa consultar nada a mais, só manda a tabela e ela já mostra a disponibilidade real de cada marca/variação.
@@ -291,7 +293,7 @@ const TOOLS = [
   },
   {
     name: 'consultar_estoque',
-    description: 'Consulta estoque e preço de um produto específico.',
+    description: 'Consulta a QUANTIDADE em estoque de um produto específico. NÃO retorna preço de venda — preço de venda vem sempre de enviar_catalogo.',
     input_schema: {
       type: 'object',
       properties: {
@@ -416,25 +418,38 @@ const TOOLS = [
   }
 ];
 
+// Remove campos de preço/custo da planilha antes de devolver pro agente
+// de vendas. O preço de venda real é SEMPRE o do catálogo (enviar_catalogo),
+// nunca o custo/preço interno da planilha de estoque.
+function removerPrecoDaResposta(produto) {
+  if (!produto) return produto;
+  const { preco, custo, ...resto } = produto;
+  return resto;
+}
+
 // ── Executor de ferramentas ───────────────────
 async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNome) {
   console.log(`[Tool] ${nome}`, input);
 
   switch (nome) {
 
+    // IMPORTANTE: remove preço/custo da planilha antes de devolver pra IA
+    // do agente de vendas. A planilha serve só pra controle de estoque
+    // (quantidade) — o preço de venda é SEMPRE o do catálogo
+    // (enviar_catalogo), nunca o custo/preço interno da planilha.
     case 'listar_produtos': {
-      const lista = estoque.listarProdutos();
+      const lista = estoque.listarProdutos().map(removerPrecoDaResposta);
       return { resultado: lista.length ? lista : 'Nenhum produto disponível.' };
     }
 
     case 'buscar_produto': {
-      const encontrados = estoque.buscarProduto(input.termo);
+      const encontrados = estoque.buscarProduto(input.termo).map(removerPrecoDaResposta);
       return { resultado: encontrados.length ? encontrados : `Nenhum produto encontrado para "${input.termo}".` };
     }
 
     case 'consultar_estoque': {
       const prod = estoque.consultarEstoque(input.produto);
-      return { resultado: prod || `Produto "${input.produto}" não encontrado.` };
+      return { resultado: prod ? removerPrecoDaResposta(prod) : `Produto "${input.produto}" não encontrado.` };
     }
 
     case 'baixar_estoque': {
