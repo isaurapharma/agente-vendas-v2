@@ -1,6 +1,7 @@
 // src/agent/agente.js
 const Anthropic = require('@anthropic-ai/sdk');
 const estoque   = require('../stock/estoque');
+const catalogo  = require('../stock/catalogo');
 const { enviarTexto } = require('../webhook/evolution');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -136,284 +137,6 @@ function calcularFrete(endereco) {
   return null; // frete desconhecido — chamar Luiz humano
 }
 
-// ── Catálogo de produtos (tabelas prontas) ─────
-const CATALOGO = {
-  durateston: `✅ *Durateston - Cooper Farmacêutica* 🇮🇳 ( Linha premium)
-*250mg/ml. Cx com 10 AMPOLAS*
-R$360
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Durateston - Pharmacom* 🇪🇺 ( Linha premium)
-*300mg/ml. Frasco 10ml*
-R$330
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Durateston - Bratva Labs* ✴️
-*250mg/ml. Cx com 10 AMPOLA*
-R$250
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Durateston - Lander Land Gold* 🥇
-*250mg/ml. Frasco 10ml*
-R$210
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Durateston - Muscle Labs* 🐍
-*250mg/ml Frasco 10ml*
-R$190
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Durateston - King Pharma* 👑
-*250mg/ml. Frasco 10ml*
-R$180
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Durateston - Swiss Pharma* 🧬
-*250mg/ml. Frasco 10ml*
-R$140`,
-
-  enantato: `✅ *Enantato de Testosterona - Eminence* 🇮🇳 (Importada)
-*250mg/ml. Cx com 10 AMPOLAS*
-R$360
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Enantato - Bratva Labs* ✴️
-*250mg/ml. Cx com 10 AMPOLA*
-R$250
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Enantato - Lander Land Gold* 🥇
-*250mg/ml. Frasco 10ml*
-R$210
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Enantato - Muscle Labs* 🐍
-*250mg/ml. Frasco 10ml*
-R$190
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Enantato - King Pharma* 👑
-*250mg/ml. Frasco 10ml*
-R$180
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Enantato - Swiss Pharma* 🧬
-*250mg/ml. Frasco 10ml*
-R$140`,
-
-  masteron: `✅️ *Masteron Propionato - Cooper Pharma* 🇮🇳
-*100mg/ml. Cx com 10 Ampolas*
-R$450
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Masteron Propionato - Lander Land Gold* 🥇
-*100mg/ml. Frasco 10ml*
-R$220
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Masteron Propionato - Bratva Labs* ✴️
-*100mg/ml. Frasco 10ml*
-R$200
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Masteron Propionato - Swiss Pharma* 🧬
-*100mg/ml. Frasco 10ml*
-R$140
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Masteron Enantato - King Pharma* 👑
-*100mg/ml. Frasco 10ml*
-R$190
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Masteron Enantato - Swiss Pharma* 🧬
-*200mg/ml. Frasco 10ml*
-R$160`,
-
-  primobolan: `✅️ *Primobolan - Muscle Labs* 🐍
-*100mg/ml. Frasco 10ml*
-R$350
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Primobolan - King Pharma* 👑
-*100mg/ml. Frasco 10ml*
-R$320
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Primobolan - Swiss Pharma* 🧬
-*100mg/ml. Frasco 10ml*
-R$230`,
-
-  deca: `✅ *Deca - Pharmacom* 🇪🇺 (Linha premium)
-*300mg/ml. Cx com 10 AMPOLAS*
-R$350
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅ *Deca - Oxygen* 🇰🇼 (Importada)
-*250mg/ml. Cx com 10 AMPOLAS*
-R$270
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Deca - Lander Land Gold* 🥇
-*200mg/ml. Frasco 10ml*
-R$210
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅ *Deca - Muscle Labs* 🐍
-*300mg/ml. Frasco 10ml*
-R$190
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Deca - King Pharma* 👑
-*300mg/ml. Frasco 10ml*
-R$180
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Deca - Swiss Pharma* 🧬
-*300mg/ml. Frasco 10ml*
-R$140`,
-
-  trembolona: `✅️ *Trembolona Acetato - Lander Land Gold* 🥇
-*100mg/ml. Frasco 10ml*
-R$230
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Trembolona Acetato - Muscle Labs* 🐍
-*100mg/ml. Frasco 10ml*
-R$190
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Trembolona Acetato - Swiss Pharma* 🧬
-*100mg/ml. Frasco 10ml*
-R$140
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-☑️ *Trembolona Enantato - Lander Land Gold* 🥇
-*200mg/ml. Frasco 10ml*
-R$220
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-☑️ *Trembolona Enantato - Swiss Pharma* 🧬
-*200mg/ml. Frasco 10ml*
-R$150`,
-
-  oxandrolona: `✅️ *Oxandrolona - Lander Land*
-*10mg/cps. Frasco 50 comprimidos*
-R$240
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Oxandrolona - Lander Land*
-*5mg/cps. Frasco 100 comprimidos*
-R$240
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Oxandrolona Manipulada* 🧬
-*20mg/cps. Frasco 100 comprimidos*
-R$200
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Oxandrolona Manipulada* 🧬
-*10mg/cps. Frasco 100 comprimidos*
-R$150`,
-
-  peptideos: `✅ *Peptídeos - GEN HEATH* 🧬 (Importado)
-
-📍GHK-cu 100mg — R$850
-📍Most-C 10mg — R$750
-📍Ipamorelin 10mg — R$750
-📍HGH Frag 176-191 5mg — R$750
-📍BPC 157 10mg — R$750
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Peptídeos - ZPHC* 🧬 (Importado)
-
-Ipamorelin 5mg — R$370
-TB500 5mg — R$370
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *NEO Peptídeos* 🧬 (Importado)
-
-GHK-CU 100mg — R$650
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅ *Better Performance* 🧬 (Nacional)
-
-Tesamorelin 5mg — R$180
-TB 500 5mg — R$180
-GHRp6 5mg — R$180
-Slupp 332 5mg — R$180`,
-
-  gh: `💎 *GH Somatropina (Biomanguinhos)*
-*Caixa com 4ui* — R$60
-🚨 (Valor para pedidos acima de 10 cxs)
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-💎 *GH Genotropin caneta 36ui*
-R$1.250`,
-
-  emagrecedores: `✅ *Retatrutida - ZPHC*
-Cx fechada 120mg (5 frascos 24mg c/ diluente) — R$4.300
-Frasco 24mg c/ diluente — R$920
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅ *Retatrutida - Oxygen*
-Frasco 40mg c/ diluente — R$1.450
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *LIPOLESS (Tirzepatida)*
-Cx fechada 60mg — R$1.200
-Frasco 15mg — R$350
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Ozempic caneta 1mg* — R$1.250
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-🔥 *Clembuterol - Lander Land Gold*
-Caixa 50 comprimidos 0.04mg — R$150
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-🔥 *Lipostabil*
-5 ampolas 5ml cada — R$140`
-};
 
 // ── System Prompt do Luiz ─────────────────────
 function buildSystemPrompt(foraDoHorario = false, msgHorario = "") {
@@ -424,7 +147,7 @@ function buildSystemPrompt(foraDoHorario = false, msgHorario = "") {
 
 ⚠️ REGRA MÁXIMA PRIORIDADE — LEIA ANTES DE QUALQUER OUTRA COISA:
 Qualquer pergunta sobre produto, preço, ou disponibilidade ("tem X?", "qual o preço de Y?", "manda a tabela de Z") EXIGE chamar a ferramenta buscar_produto, consultar_estoque ou enviar_catalogo ANTES de responder qualquer coisa pro cliente. Você NUNCA responde de cabeça sobre preço ou estoque sem checar a ferramenta primeiro, mesmo que ache que sabe a resposta.
-PROIBIDO terminantemente dizer frases como "problema no sistema", "já resolvo isso", "tá com erro aqui" ou qualquer desculpa genérica sobre dificuldade técnica — isso nunca é uma resposta válida pro cliente. Se uma ferramenta retornar erro, tenta de novo ou aciona o Luiz humano com o motivo real, mas nunca inventa desculpa vaga de sistema.
+PROIBIDO terminantemente dizer frases como "problema no sistema", "já resolvo isso", "tá com erro aqui", "perrengue", "dando uma travada", "deu uma bugada" ou qualquer desculpa genérica/informal sobre dificuldade técnica — isso nunca é uma resposta válida pro cliente. Quando precisar acionar o Luiz humano, a frase de transição é sempre simples e neutra, tipo "só um minutinho!" — nunca uma desculpa inventada sobre o motivo técnico.
 
 PERSONALIDADE:
 - Linguagem carioca, urbana, descontraída. Sem formalidade nenhuma.
@@ -472,14 +195,13 @@ USO PARA TERCEIROS (cliente perguntando sobre uso da mãe, pai, amigo etc):
 - Reforça de forma natural que acompanhamento médico ajuda a monitorar com exames.
 - Nunca oferece valores/preço no final da resposta de forma proativa — só informa preço se o cliente perguntar especificamente.
 
-VERIFICAÇÃO DE ESTOQUE — REGRA OBRIGATÓRIA, duas situações diferentes:
+CATÁLOGO E ESTOQUE — REGRA SIMPLIFICADA E À PROVA DE FALHA:
 
-1) Cliente pergunta de forma GERAL sobre uma categoria/preço (ex: "qual o preço do Durateston?", "tem tabela de Masteron?"): manda a tabela completa normal com enviar_catalogo, mas ANTES disso chama consultar_estoque ou buscar_produto pra cada variação daquela categoria, e se alguma marca/variação específica estiver com quantidade 0, marca isso visualmente na resposta (ex: acrescenta "❌ EM FALTA" do lado daquela linha específica, ou avisa em texto corrido logo depois da tabela quais itens estão em falta agora). Isso deixa claro pro cliente que a loja vende aquele produto, só que está sem estoque dele nesse momento específico.
-
-2) Cliente pergunta de forma ESPECÍFICA se "tem" um produto determinado (ex: "vc tem Primobolan Swiss?", "tem GHK-Cu?"): SEMPRE chama buscar_produto ou consultar_estoque primeiro pra confirmar a disponibilidade real antes de responder sim ou não.
-   - Se tiver disponível: confirma ("tenho sim!") e já manda a tabela da categoria com enviar_catalogo, sem perguntar antes qual variação ele quer.
-   - Se estiver em falta (quantidade 0) ou não encontrado: avisa que está em falta nesse momento, de forma natural e tranquila (ex: "esse aí tá em falta agora, mas posso te avisar quando chegar"), sem mandar a tabela de preço daquele item específico.
-
+- Quando o cliente perguntar preço, tabela, ou se "tem" um produto que existe nas categorias do catálogo (durateston, enantato, masteron, primobolan, deca, trembolona, oxandrolona, peptideos, gh, emagrecedores, e possivelmente outras categorias novas que o Luiz humano tenha cadastrado): SEMPRE chama enviar_catalogo com a categoria certa. Isso nunca falha e sempre deve ser feito — é a ação prioritária e obrigatória pra esse tipo de pergunta.
+- O catálogo já vem com a marcação "❌ EM FALTA" ao lado de qualquer item que estiver sem estoque no momento — você não precisa consultar nada a mais, só manda a tabela e ela já mostra a disponibilidade real de cada marca/variação.
+- Se o cliente perguntar especificamente sobre um item que está marcado "❌ EM FALTA" no catálogo: avisa que esse específico está em falta agora, mas que os outros da mesma categoria estão disponíveis.
+- NUNCA, em hipótese alguma, deixa de responder ou aciona o Luiz humano só porque não tem certeza do estoque. O catálogo de preços sempre pode ser mandado, e ele já reflete a disponibilidade real.
+- NUNCA diz frases como "problema no sistema", "endpoint falhou", "erro de conexão" pro cliente ou pro Luiz — isso nunca é uma resposta aceitável.
 - NUNCA pergunta "quer fechar?", "quer que eu já feche?", "vamos fechar?" ou qualquer variação proativa de fechamento depois de mandar a tabela ou responder uma pergunta. Só responde o que foi perguntado e espera o cliente decidir e dar o próximo passo por conta própria.
 
 QUANDO PERGUNTAREM "QUAL A MELHOR MARCA":
@@ -489,8 +211,9 @@ CATÁLOGO disponível em JSON para consulta quando precisar — use a ferramenta
 
 FRETE E ENTREGA:
 - Entrega em qualquer lugar — bairros fixos e Correios
+- REGRA CRÍTICA: antes de chamar calcular_frete, SEMPRE tem que saber o BAIRRO do cliente. Se o cliente só mandou rua e número, sem mencionar o bairro, pergunta o bairro pra ele antes de calcular (ex: "qual o bairro?"). NUNCA aciona o Luiz humano só porque faltou o bairro — pergunta direto pro cliente primeiro, e só aciona o Luiz se o bairro informado realmente não estiver na lista de frete fixo cadastrada.
 - Bairros com frete fixo: calculado automaticamente
-- Bairros fora da lista: fala "só um minuto que já coto!" e aciona o Luiz humano (sem explicar que é fora da zona)
+- Bairros fora da lista cadastrada: fala "só um minuto que já coto!" e aciona o Luiz humano (sem explicar que é fora da zona)
 - Correios: quando cliente perguntar, fala "Envio sim! Me passa o CEP que já coto pra você" e usa a ferramenta cotar_correios com o CEP do cliente
 - Nunca mencionar "zona fixa", "fora da área" ou similares — sempre positivo
 - FERIADOS: trata feriados nacionais bem conhecidos como domingo (loja não atende). Para feriados locais/municipais que não tem certeza, não inventa — fala que vai confirmar e aciona o Luiz humano se a pergunta for específica sobre um feriado que não tem certeza se afeta a operação. O Luiz humano pode adicionar uma regra extra avisando sobre feriados locais quando for o caso.
@@ -503,7 +226,8 @@ PAGAMENTO:
 - Após cliente querer fechar: passa o valor do produto primeiro
 - Quando cliente confirmar: soma com frete e usa a ferramenta enviar_pix
 - PIX enviado em duas mensagens separadas (instruções + chave sozinha pra copiar fácil)
-- Só dá baixa no estoque e despacha pro grupo APÓS confirmar o PIX
+- CONFIRMAÇÃO DE PAGAMENTO — RECONHECE SOZINHO, SEM PRECISAR DO LUIZ HUMANO: quando o cliente mandar um comprovante (foto/imagem, mesmo que a legenda venha vazia tipo "[COMPROVANTE DE PAGAMENTO ENVIADO]"), ou confirmar por texto que já pagou/fez o PIX/transferiu (ex: "pronto", "paguei", "já caiu?", "mandei"), considera o pagamento confirmado direto e chama despachar_pedido automaticamente — não precisa esperar confirmação manual do Luiz humano pra isso.
+- Só chama despachar_pedido APÓS esse reconhecimento de pagamento confirmado (nunca antes).
 
 LUIZ HUMANO:
 - Quando precisar acionar o Luiz humano (frete desconhecido ou situação complexa): diz "só um minuto!" e usa a ferramenta acionar_luiz_humano
@@ -517,11 +241,10 @@ CONTEXTO E DÚVIDAS — REGRA CRÍTICA:
 - Se NÃO tiver a informação no histórico e a pergunta não for algo simples de esclarecer (ex: cliente cobra algo específico que a IA não tem registro, ou situação confusa/ambígua): NUNCA diz "não entendi", "não tenho essa informação" ou qualquer variação disso pro cliente. Nesses casos, fala só "só um minutinho!" (ou variação curta) e usa a ferramenta acionar_luiz_humano, explicando o motivo no campo "motivo" pro Luiz humano entender o que está pendente.
 - Regra de ouro: o cliente NUNCA deve perceber que a IA ficou confusa ou sem resposta. Ou ela sabe e responde curto, ou ela aciona o Luiz humano discretamente.
 
-ÁUDIOS (mensagens marcadas com [ÁUDIO TRANSCRITO]):
-- Trate a transcrição como se fosse o texto digitado pelo cliente normalmente.
-- Transcrição automática pode vir com erro, palavra faltando, ou trecho confuso/cortado.
-- Se a transcrição tiver alguma palavra ou trecho que não faz sentido, ficar ambíguo, ou parecer incompleto a ponto de mudar o significado do pedido: NÃO tenta adivinhar nem pede pro cliente repetir o áudio. Aciona o Luiz humano direto, e no campo "motivo" inclui o texto transcrito pra ele entender o que pode estar errado.
-- Se a mensagem vier como "[ÁUDIO ENVIADO — não foi possível transcrever]": aciona o Luiz humano imediatamente, sem tentar adivinhar o conteúdo.
+ÁUDIOS (mensagens marcadas com [ÁUDIO RECEBIDO — instrua a pessoa...]):
+- A IA NÃO ouve nem transcreve áudio. Quando o cliente manda um áudio, responda de forma natural e educada avisando que não consegue ouvir áudios e pedindo pra ele escrever a mensagem (ex: "oi! não consigo ouvir áudio aqui não, pode escrever pra mim?").
+- Nunca finja que ouviu o áudio nem tente adivinhar o conteúdo.
+- Não precisa acionar o Luiz humano só por causa disso — é só pedir pra escrever, normal.
 
 MENSAGEM DE ENTREGA CONFIRMADA:
 Após despachar o pedido, enviar ao cliente:
@@ -617,13 +340,14 @@ const TOOLS = [
   },
   {
     name: 'calcular_frete',
-    description: 'Calcula o frete com base no endereço do cliente. Retorna o valor ou null se precisar acionar Luiz humano.',
+    description: 'Calcula o frete com base no BAIRRO do cliente (não no endereço completo). SEMPRE confirme/pergunte o bairro explicitamente ao cliente antes de chamar essa ferramenta, mesmo que ele já tenha mandado rua e número — sem o nome do bairro não dá pra calcular.',
     input_schema: {
       type: 'object',
       properties: {
-        endereco: { type: 'string', description: 'Endereço completo do cliente' }
+        bairro: { type: 'string', description: 'Nome do bairro, confirmado com o cliente' },
+        endereco: { type: 'string', description: 'Endereço completo (rua, número), se disponível, apenas para registro' }
       },
-      required: ['endereco']
+      required: ['bairro']
     }
   },
   {
@@ -663,7 +387,7 @@ const TOOLS = [
   },
   {
     name: 'despachar_pedido',
-    description: 'Envia pedido pro grupo de entrega após PIX confirmado. Não inclui valores.',
+    description: 'Reconhece a confirmação de pagamento do cliente (comprovante/foto, ou texto confirmando que pagou/enviou o PIX) e envia o pedido pro grupo de entrega automaticamente, sem precisar de validação manual do Luiz humano. Não inclui valores nem a chave PIX na mensagem pro grupo de entrega — só produto, cliente e endereço.',
     input_schema: {
       type: 'object',
       properties: {
@@ -718,20 +442,20 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
     }
 
     case 'enviar_catalogo': {
-      const cat = CATALOGO[input.categoria.toLowerCase()];
+      const cat = catalogo.getCategoria(input.categoria.toLowerCase());
       if (!cat) return { resultado: `Categoria "${input.categoria}" não encontrada.` };
       await enviarTexto(clienteNumero, cat);
       return { resultado: { ok: true, mensagem: `Catálogo de ${input.categoria} enviado.` } };
     }
 
     case 'calcular_frete': {
-      sessao.endereco = input.endereco;
-      const frete = calcularFrete(input.endereco);
+      sessao.endereco = input.endereco || input.bairro;
+      const frete = calcularFrete(input.bairro);
       sessao.frete = frete;
       if (frete === null) {
-        return { resultado: { frete: null, precisaAcionarLuiz: true, mensagem: 'Bairro fora da zona de frete fixo. Acionar Luiz humano para cotar.' } };
+        return { resultado: { frete: null, precisaAcionarLuiz: true, mensagem: `Bairro "${input.bairro}" fora da zona de frete fixo cadastrada. Acionar Luiz humano para cotar.` } };
       }
-      return { resultado: { frete, endereco: input.endereco } };
+      return { resultado: { frete, bairro: input.bairro } };
     }
 
     case 'cotar_correios': {
@@ -783,11 +507,17 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
         : clienteNumero;
 
       if (grupoAdmin) {
-        await enviarTexto(grupoAdmin,
+        const envioAviso = await enviarTexto(grupoAdmin,
           `🔔 *Atenção Luiz!*\n\n` +
           `Cliente: ${identificacaoCliente}\n` +
           `Motivo: ${input.motivo}`
         );
+        // Guarda o ID dessa mensagem associado ao cliente, pra quando o
+        // Luiz humano der reply nela, o sistema saber automaticamente
+        // qual cliente repassar a resposta dele.
+        if (envioAviso?.messageId) {
+          registrarMensagemDeAviso(envioAviso.messageId, clienteNumero, clienteNome);
+        }
       }
 
       // Notificação push via ntfy — alarme imediato pro celular do Luiz humano
@@ -865,6 +595,19 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
 
       await enviarTexto(grupoEntrega, msg);
 
+      // Avisa o grupo Admin que um pedido foi confirmado e despachado,
+      // pro Luiz humano saber que tem pedido novo e poder checar se
+      // está tudo certo no grupo de entrega.
+      const grupoAdminAviso = process.env.ADMIN_GROUP_JID;
+      if (grupoAdminAviso) {
+        try {
+          await enviarTexto(grupoAdminAviso,
+            `✅ Pedido confirmado e enviado pro grupo de entrega!\n` +
+            `Cliente: ${input.clienteNome || clienteNumero}`
+          );
+        } catch (_) {}
+      }
+
       try {
         require('./admin').registrarPedidoNoRelatorio({
           clienteNumero,
@@ -896,7 +639,11 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
   // Se Luiz humano interveio manualmente, aguarda 3min desde a ÚLTIMA
   // mensagem que ELE mandou (não desde a mensagem do cliente) antes de
   // a IA retomar a conversa automaticamente.
-  if (sessao.luizHumanoAtivo) {
+  // EXCEÇÃO: se mensagemTexto for null, é uma chamada especial (ex:
+  // repassar resposta do Luiz humano pro cliente via reply no Admin) —
+  // nesse caso a pausa de 3min não deve bloquear, já que é o próprio
+  // Luiz humano gerando essa resposta.
+  if (sessao.luizHumanoAtivo && mensagemTexto !== null) {
     const agora = Date.now();
     const tresMin = 3 * 60 * 1000;
     const tempoDesdeUltimaMsgLuiz = agora - (sessao.luizHumanoUltimaMsg || agora);
@@ -932,7 +679,9 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
     }
   }
 
-  sessao.historico.push({ role: "user", content: mensagemTexto });
+  if (mensagemTexto !== null) {
+    sessao.historico.push({ role: "user", content: mensagemTexto });
+  }
 
   if (sessao.historico.length > 40) {
     sessao.historico = sessao.historico.slice(-40);
@@ -1002,9 +751,11 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
             conteudoResultado = JSON.stringify(saida.resultado);
           } catch (errFerramenta) {
             console.error(`[Tool] Erro ao executar ${bloco.name}:`, errFerramenta);
+            // Passa o erro REAL pra IA, em vez de mensagem genérica que
+            // ela acaba parafraseando de forma estranha pro cliente.
             conteudoResultado = JSON.stringify({
               erro: true,
-              mensagem: 'Erro interno ao executar a ferramenta. Acionar Luiz humano se necessário.'
+              mensagem: `Erro real ao executar ${bloco.name}: ${errFerramenta.message || errFerramenta}. Se for sobre catálogo/preço, ainda assim tenta usar enviar_catalogo, que não depende dessa ferramenta que falhou.`
             });
           }
 
@@ -1048,4 +799,78 @@ function registrarMensagemHumana(clienteNumero, textoLuiz = null) {
   salvarSessoesNoDisco();
 }
 
-module.exports = { processarMensagem, getSessao, registrarMensagemHumana };
+// ── Mapeamento de mensagens de aviso (acionar_luiz_humano) -> cliente ──
+// Permite que quando o Luiz humano der REPLY numa mensagem de aviso no
+// grupo Admin, o sistema saiba automaticamente pra qual cliente repassar
+// a resposta dele, sem precisar ele digitar o número de novo.
+function getAvisosFilePath() {
+  return path.resolve(process.env.AVISOS_FILE_PATH || './data/avisos-luiz.json');
+}
+
+function carregarAvisos() {
+  try {
+    const arquivo = getAvisosFilePath();
+    if (!fs.existsSync(arquivo)) return {};
+    return JSON.parse(fs.readFileSync(arquivo, 'utf-8'));
+  } catch (_) {
+    return {};
+  }
+}
+
+function salvarAvisos() {
+  try {
+    const arquivo = getAvisosFilePath();
+    const dir = path.dirname(arquivo);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(arquivo, JSON.stringify(_avisos), 'utf-8');
+  } catch (err) {
+    console.error('[Agente] Erro ao salvar avisos no disco:', err.message);
+  }
+}
+
+let _avisos = carregarAvisos();
+
+function registrarMensagemDeAviso(messageId, clienteNumero, clienteNome) {
+  _avisos[messageId] = { clienteNumero, clienteNome, criadoEm: Date.now() };
+  // Limpeza simples: remove avisos com mais de 24h pra não acumular pra sempre
+  const umDia = 24 * 60 * 60 * 1000;
+  for (const id of Object.keys(_avisos)) {
+    if (Date.now() - _avisos[id].criadoEm > umDia) delete _avisos[id];
+  }
+  salvarAvisos();
+}
+
+// Dado o ID de uma mensagem (stanzaId do reply), retorna qual cliente
+// está associado a ela, ou null se não encontrar.
+function getClienteDoAviso(messageId) {
+  return _avisos[messageId] || null;
+}
+
+// Processa a resposta do Luiz humano (via reply) repassando a informação
+// pro cliente certo automaticamente, usando o agente vendedor pra
+// formular a mensagem de forma natural baseada no que o Luiz disse.
+async function processarRespostaLuizParaCliente(clienteNumero, clienteNome, textoLuiz) {
+  const sessao = getSessao(clienteNumero);
+  sessao.historico.push({
+    role: 'user',
+    content: `[O Luiz humano respondeu sobre o caso pendente desse cliente, no grupo Admin]: "${textoLuiz}". Repasse essa informação pro cliente de forma natural, como o Luiz mesmo, sem mencionar grupo Admin ou que veio de outra conversa.`
+  });
+  salvarSessoesNoDisco();
+
+  // Reusa o loop principal pra gerar a resposta natural baseada no que
+  // o Luiz disse, e envia de fato pro cliente.
+  const resposta = await processarMensagem(clienteNumero, null, clienteNome || 'cliente');
+  if (resposta) {
+    await enviarTexto(clienteNumero, resposta);
+  }
+  return resposta;
+}
+
+module.exports = {
+  processarMensagem,
+  getSessao,
+  registrarMensagemHumana,
+  registrarMensagemDeAviso,
+  getClienteDoAviso,
+  processarRespostaLuizParaCliente
+};
