@@ -285,7 +285,7 @@ async function handleWebhook(req, res) {
       const mensagem = data?.key ? data : (data?.messages?.[0] || null);
       const remoteJid = mensagem?.key?.remoteJid;
       if (remoteJid && !remoteJid.endsWith('@g.us')) {
-        await enviarTexto(remoteJid, 'opa, deu um perrengue aqui rapidinho! já volto 🙏');
+        await enviarTexto(remoteJid, 'só um minutinho! 🙏');
       }
     } catch (_) {}
   }
