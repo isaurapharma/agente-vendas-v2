@@ -58,6 +58,27 @@ async function marcarComoLida(remoteJid, messageId) {
   } catch (_) {}
 }
 
+// ── Marcar chat como NÃO lido ─────────────────────────────────
+// Usado depois que o agente responde no grupo Admin, pra chamar atenção
+// de que teve atividade nova ali. Atenção: existe relato conhecido de
+// bug nesse endpoint específico da Evolution API em certas versões
+// (erro "myAppStateKey not present") — por isso loga o erro real em
+// vez de engolir silenciosamente, pra facilitar diagnóstico se falhar.
+async function marcarComoNaoLida(remoteJid, messageId) {
+  try {
+    await axios.post(`${BASE}/chat/markChatUnread/${INST}`, {
+      lastMessage: [{ remoteJid, fromMe: true, id: messageId }],
+      chat: remoteJid
+    }, {
+      headers: { 'apikey': KEY }
+    });
+    return { ok: true };
+  } catch (err) {
+    console.error('[Evolution] Erro ao marcar chat como não lido:', err?.response?.data || err.message);
+    return { ok: false, erro: err?.response?.data || err.message };
+  }
+}
+
 // ── Simular "digitando..." ────────────────────────────────────
 async function digitando(remoteJid, duracaoMs = 2000) {
   try {
@@ -70,4 +91,4 @@ async function digitando(remoteJid, duracaoMs = 2000) {
   } catch (_) {}
 }
 
-module.exports = { enviarTexto, enviarImagem, marcarComoLida, digitando };
+module.exports = { enviarTexto, enviarImagem, marcarComoLida, marcarComoNaoLida, digitando };
