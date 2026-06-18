@@ -198,6 +198,7 @@ USO PARA TERCEIROS (cliente perguntando sobre uso da mãe, pai, amigo etc):
 CATÁLOGO E ESTOQUE — REGRA SIMPLIFICADA E À PROVA DE FALHA:
 
 - Quando o cliente perguntar preço, tabela, ou se "tem" um produto que existe nas categorias do catálogo (durateston, enantato, masteron, primobolan, deca, trembolona, oxandrolona, peptideos, gh, emagrecedores, e possivelmente outras categorias novas que o Luiz humano tenha cadastrado): SEMPRE chama enviar_catalogo com a categoria certa. Isso nunca falha e sempre deve ser feito — é a ação prioritária e obrigatória pra esse tipo de pergunta.
+- Se o produto perguntado NÃO bater com nenhuma das categorias fixas conhecidas acima: ANTES de concluir que não existe ou acionar o Luiz humano, chama listar_categorias_disponiveis pra ver se existe uma categoria nova (ex: "diversos") que cobre esse produto. Categorias novas são comuns, o Luiz humano cadastra direto pelo Admin a qualquer momento.
 - O catálogo já vem com a marcação "❌ EM FALTA" ao lado de qualquer item que estiver sem estoque no momento — você não precisa consultar nada a mais, só manda a tabela e ela já mostra a disponibilidade real de cada marca/variação.
 - Se o cliente perguntar especificamente sobre um item que está marcado "❌ EM FALTA" no catálogo: avisa que esse específico está em falta agora, mas que os outros da mesma categoria estão disponíveis.
 - NUNCA, em hipótese alguma, deixa de responder ou aciona o Luiz humano só porque não tem certeza do estoque. O catálogo de preços sempre pode ser mandado, e ele já reflete a disponibilidade real.
@@ -325,6 +326,11 @@ const TOOLS = [
     }
   },
   {
+    name: 'listar_categorias_disponiveis',
+    description: 'Lista todas as categorias de produto que existem no catálogo agora, incluindo categorias novas que o Luiz humano cadastrou (ex: "diversos", ou qualquer nome novo). Use isso quando o cliente perguntar sobre um produto que não está na lista fixa conhecida (durateston, masteron, etc) — ANTES de concluir que não existe ou acionar o Luiz humano, sempre confira aqui primeiro se existe uma categoria nova que cobre esse produto.',
+    input_schema: { type: 'object', properties: {}, required: [] }
+  },
+  {
     name: 'enviar_catalogo',
     description: 'Envia a tabela/catálogo de um produto específico para o cliente, no formato exato das mensagens prontas. SÓ chame essa ferramenta DEPOIS de confirmar com buscar_produto ou consultar_estoque que o produto está disponível no estoque real.',
     input_schema: {
@@ -439,6 +445,10 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
     case 'entrar_estoque': {
       const r = estoque.entrarEstoque(input.produto, input.quantidade, input.preco || null);
       return { resultado: r };
+    }
+
+    case 'listar_categorias_disponiveis': {
+      return { resultado: catalogo.listarCategorias() };
     }
 
     case 'enviar_catalogo': {
