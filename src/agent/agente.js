@@ -168,7 +168,7 @@ PERSONALIDADE:
 - NUNCA pergunta "qual produto você quer?" ou tenta fechar venda ativamente — espera o cliente guiar
 - Se cliente perguntar "tem X?": responde só "Tem sim!" (ou "no momento tá em falta" se estiver marcado em falta no catálogo) — NÃO manda a tabela de preços, só confirma disponibilidade
 - Se cliente perguntar "quanto custa X?" ou "qual o preço de X?": aí manda a tabela da categoria correspondente
-- FECHAMENTO DE PEDIDO: quando cliente pedir um produto pra fechar (ex: "quero Masteron Cooper"), ela: (1) identifica o produto EXATO na tabela pelo nome da marca — se só existe uma opção daquela marca, não pergunta nada, já assume aquela; só pergunta se realmente existirem duas ou mais opções da MESMA marca com nomes diferentes; (2) lê o valor exato do produto na tabela; (3) pergunta o endereço pra calcular o frete; (4) quando cliente responde o bairro, calcula frete conforme tabela cadastrada; (5) passa numa mensagem só: nome do produto + valor do produto + valor do frete + valor total + chave PIX; (6) pede comprovante pra finalizar. NUNCA pede confirmação antes de passar o total — passa direto.
+- FECHAMENTO DE PEDIDO: quando cliente pedir um produto pra fechar (ex: "quero Masteron Cooper"), ela: (1) identifica o produto EXATO na tabela pelo nome da marca — se só existe uma opção daquela marca, NÃO PERGUNTA NADA, já assume aquela e vai direto pro próximo passo; NUNCA pergunta "qual opção?" se só existe uma; só pergunta se realmente existirem duas ou mais opções da MESMA marca com nomes DIFERENTES na tabela; (2) usa consultar_preco_catalogo pra ler o valor EXATO do produto internamente — NUNCA fecha pedido sem ter o valor em mãos, e NUNCA usa enviar_catalogo pra isso (enviar_catalogo manda a tabela pro cliente, consultar_preco_catalogo só lê internamente); (3) pergunta o endereço pra calcular o frete; (4) quando cliente responde o bairro, calcula frete conforme tabela cadastrada; (5) passa numa mensagem só: nome do produto + valor do produto + valor do frete + valor total + chave PIX; (6) pede comprovante pra finalizar. NUNCA pede confirmação antes de passar o total — passa direto.
 - Produto em falta: se cliente perguntar quando chega → "vou verificar! 🫡" + aciona Luiz
 - RETIRADA: cliente quer retirar/pegar o produto → responde "Blz, que horas?" → cliente responde → "Só um minutinho que vou ver 😉" + aciona Luiz
 - Nunca expõe a própria mecânica interna pro cliente (não diz "vi no catálogo", "no meu sistema tem", "deixa eu checar minha lista" — fala como se simplesmente soubesse, naturalmente)
@@ -342,13 +342,27 @@ const TOOLS = [
   },
   {
     name: 'enviar_catalogo',
-    description: 'Envia a tabela/catálogo de um produto específico para o cliente, no formato exato das mensagens prontas. SÓ chame essa ferramenta DEPOIS de confirmar com buscar_produto ou consultar_estoque que o produto está disponível no estoque real.',
+    description: 'Envia a tabela/catálogo de um produto específico para o cliente, no formato exato das mensagens prontas. Use quando o cliente perguntar preço ou pedir a tabela. NÃO use pra consultar preço internamente no fechamento de pedido — pra isso use consultar_preco_catalogo.',
     input_schema: {
       type: 'object',
       properties: {
         categoria: {
           type: 'string',
-          description: 'Categoria do produto: durateston, enantato, masteron, primobolan, deca, trembolona, oxandrolona, peptideos, gh, emagrecedores'
+          description: 'Categoria do produto: durateston, enantato, masteron, primobolan, deca, trembolona, oxandrolona, peptideos, gh, emagrecedores, dianabol, hemogenim, deposteron, boldenona, stanozolol, diversos, mistos'
+        }
+      },
+      required: ['categoria']
+    }
+  },
+  {
+    name: 'consultar_preco_catalogo',
+    description: 'Consulta o conteúdo da tabela de uma categoria INTERNAMENTE, sem enviar nada pro cliente. Use no fechamento de pedido pra ler o preço exato do produto antes de calcular o total. Nunca use enviar_catalogo pra isso.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        categoria: {
+          type: 'string',
+          description: 'Categoria do produto: durateston, enantato, masteron, primobolan, deca, trembolona, oxandrolona, peptideos, gh, emagrecedores, dianabol, hemogenim, deposteron, boldenona, stanozolol, diversos, mistos'
         }
       },
       required: ['categoria']
@@ -479,6 +493,15 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
       if (!cat) return { resultado: `Categoria "${input.categoria}" não encontrada.` };
       await enviarTexto(clienteNumero, cat);
       return { resultado: { ok: true, mensagem: `Catálogo de ${input.categoria} enviado.` } };
+    }
+
+    case 'consultar_preco_catalogo': {
+      // Retorna o texto da categoria pra IA ler internamente e extrair
+      // o preço do produto específico — SEM enviar nada pro cliente.
+      // Usar isso no fechamento de pedido, não o enviar_catalogo.
+      const cat = catalogo.getCategoria(input.categoria.toLowerCase());
+      if (!cat) return { resultado: `Categoria "${input.categoria}" não encontrada no catálogo.` };
+      return { resultado: cat };
     }
 
     case 'calcular_frete': {
