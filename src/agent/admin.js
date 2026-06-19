@@ -248,6 +248,11 @@ const TOOLS_ADMIN = [
     input_schema: { type: 'object', properties: {}, required: [] }
   },
   {
+    name: 'restaurar_catalogo_padrao',
+    description: 'Restaura o catálogo de cliente final para o padrão original do código, apagando qualquer edição salva em disco. Use quando o Luiz humano pedir "restaura o catálogo", "volta pro padrão" ou similar.',
+    input_schema: { type: 'object', properties: {}, required: [] }
+  },
+  {
     name: 'substituir_categoria_catalogo_revenda',
     description: 'Substitui o texto completo de uma categoria no CATÁLOGO DE REVENDA (preço diferenciado pra revendedor, separado do catálogo de cliente final). Use quando o Luiz humano mandar uma tabela de preço específica pra revendedor.',
     input_schema: {
@@ -509,6 +514,11 @@ async function executarFerramentaAdmin(nome, input) {
 
     case 'listar_categorias_catalogo': {
       return { resultado: catalogo.listarCategorias() };
+    }
+
+    case 'restaurar_catalogo_padrao': {
+      const resultado = catalogo.restaurarPadrao();
+      return { resultado };
     }
 
     case 'substituir_categoria_catalogo_revenda': {
