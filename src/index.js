@@ -1,8 +1,6 @@
 // src/index.js
 // Ponto de entrada do servidor
-
 require('dotenv').config();
-
 const express = require('express');
 const { handleWebhook } = require('./webhook/handler');
 
@@ -14,11 +12,8 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // ── Rotas ──────────────────────────────────────
-
-// Webhook principal da Evolution API
 app.post('/webhook', handleWebhook);
 
-// Health check
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -27,7 +22,6 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Rota raiz
 app.get('/', (req, res) => {
   res.json({ mensagem: 'Agente de Vendas WhatsApp — rodando ✅' });
 });
@@ -42,10 +36,37 @@ app.listen(PORT, () => {
   console.log(`🛵 Grupo:      ${process.env.DELIVERY_GROUP_JID}\n`);
 });
 
+// ── Monitor de conexão (verifica a cada 5 min) ─
+// Reconecta automaticamente se a instância WhatsApp desconectar,
+// evitando que o agente pare de responder sem que ninguém perceba.
+setInterval(async () => {
+  try {
+    const res = await fetch(`${process.env.EVOLUTION_API_URL}/instance/connectionState/${process.env.EVOLUTION_INSTANCE}`, {
+      headers: { 'apikey': process.env.EVOLUTION_API_KEY }
+    });
+    const data = await res.json();
+    const state = data?.instance?.state;
+    console.log('[Monitor] Estado da instância:', state);
+    if (state !== 'open') {
+      console.log('[Monitor] Instância desconectada! Reconectando...');
+      await fetch(`${process.env.EVOLUTION_API_URL}/instance/connect/${process.env.EVOLUTION_INSTANCE}`, {
+        method: 'GET',
+        headers: { 'apikey': process.env.EVOLUTION_API_KEY }
+      });
+    }
+  } catch (e) {
+    console.error('[Monitor] Erro ao verificar conexão:', e.message);
+  }
+}, 5 * 60 * 1000);
+
 // ── Tratamento de erros não capturados ────────
+// IMPORTANTE: não usa process.exit() aqui — isso derrubava o servidor
+// a cada erro inesperado, fazendo o agente parar de responder.
+// Agora só loga o erro e continua rodando.
 process.on('unhandledRejection', (reason) => {
-  console.error('[ERRO] Promise não tratada:', reason); 
-process.exit(1);});
+  console.error('[ERRO] Promise não tratada:', reason);
+});
+
 process.on('uncaughtException', (err) => {
-  console.error('[ERRO] Exceção não capturada:', err); 
-process.exit(1);});
+  console.error('[ERRO] Exceção não capturada:', err);
+});
