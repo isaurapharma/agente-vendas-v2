@@ -93,6 +93,7 @@ R$140`,
   masteron: `✅️ *Masteron Propionato - Cooper Pharma* 🇮🇳
 *100mg/ml. Cx com 10 Ampolas*
 R$450
+[ÚNICA OPÇÃO COOPER — não existe outra Cooper nesta tabela]
 
 🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
 
