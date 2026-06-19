@@ -44,8 +44,8 @@ app.listen(PORT, () => {
 
 // ── Tratamento de erros não capturados ────────
 process.on('unhandledRejection', (reason) => {
-  console.error('[ERRO] Promise não tratada:', reason);
-});
+  console.error('[ERRO] Promise não tratada:', reason); 
+process.exit(1);});
 process.on('uncaughtException', (err) => {
-  console.error('[ERRO] Exceção não capturada:', err);
-});
+  console.error('[ERRO] Exceção não capturada:', err); 
+process.exit(1);});
