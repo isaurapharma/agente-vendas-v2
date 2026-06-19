@@ -274,13 +274,36 @@ Frasco 40mg c/ diluente — R$1.450
 
 🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
 
+✅️ *Retatrutida - Synedica Caneta 40mg* — R$2.300
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
 ✅️ *LIPOLESS (Tirzepatida)*
 Cx fechada 60mg — R$1.200
 Frasco 15mg — R$350
 
 🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
 
+✴️ *TG (Tirzepatida)*
+Cx fechada 60mg — R$1.200
+Frasco 15mg — R$350
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+☑️ *Mounjaro - Eli Lilly (Tirzepatida)*
+2,5mg (4 canetas) — R$1.800
+5mg (4 canetas) — R$2.300
+7,5mg (4 canetas) — R$3.000
+10mg (caneta) — R$2.300 🚨 Promoção
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
 ✅️ *Ozempic caneta 1mg* — R$1.250
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+🔥 *Clembuterol Veterinário Gel*
+Frasco 500ml — R$250
 
 🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
 
@@ -289,8 +312,123 @@ Caixa 50 comprimidos 0.04mg — R$150
 
 🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
 
+🔥 *Clembuterol Brontel*
+Caixa 20 comprimidos 0.02mg — R$40
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
 🔥 *Lipostabil*
-5 ampolas 5ml cada — R$140`
+5 ampolas 5ml cada — R$140`,
+
+  dianabol: `☑️ *Dianabol - Pharmacom Farmacêutica* ©️🇮🇳
+10mg/cps. Cx 100 comprimidos — R$195
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+☑️ *Dianabol - Lander Land*
+10mg/cps. Frasco 100 comprimidos — R$140
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+☑️ *Dianabol - Swiss Pharma* ⚕️
+10mg/cps. Frasco 100 comprimidos — R$90`,
+
+  hemogenim: `✅️ *Hemogenim - Pharmacom Farmacêutica* ©️🇮🇳
+25mg/cps. Cx 100 comprimidos — R$290
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Hemogenim - King Pharma* 👑
+50mg/cps. Cx com 50 comprimidos — R$190
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Hemogenim - Lander Land*
+50mg/cps. Cx com 20 comprimidos — R$125`,
+
+  deposteron: `✅️ *Deposteron - Muscle Labs India* 🐍
+250mg/ml. Frasco 10ml — R$190
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Deposteron - Lander Land Linha Gold* 🥇
+200mg/2ml. Frasco 10ml — R$175
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Deposteron - Swiss Pharma* 🧬
+250mg/ml. Frasco 10ml — R$140
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Deposteron - Lander Land*
+Cx com 3 ampolas 200mg/ampola de 2ml cada — R$90`,
+
+  boldenona: `✅️ *Boldenona - ZPHC Farmacêutica* 🇪🇺
+250mg/ml. Frasco 10ml — R$230
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Boldenona - Lander Land Linha Gold* 🥇
+250mg/ml. Frasco 10ml — R$210
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Boldenona - Muscle Labs India* 🐍🇮🇳
+200mg/ml. Frasco 10ml — R$190`,
+
+  stanozolol: `✅️ *Stanozolol - Lander Land Injetável* 💉
+Frasco 30ml 50mg/ml — R$190
+
+✅️ *Stanozolol - Lander Land Injetável* 💉
+Frasco 15ml 50mg/ml — R$125
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Stanozolol - Lander Land* 💊
+Frasco 100cps 10mg/cps — R$125
+
+✅️ *Stanozolol - Elite Pharma* 💊
+Frasco 100cps 10mg/cps — R$90`,
+
+  diversos: `✅️ *Roaccutan Genérico*
+Cx com 30 cps moles 20mg/cps — R$150
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Ritalina Original*
+Cx com 30 comprimidos 10mg/cp — R$120
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Anastrozol Europharma*
+Cx com 30 comprimidos 1mg/cp — R$120
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Citrato de Tamoxifeno Farmacêutico*
+Cx com 30 comprimidos 20mg/cp — R$80
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Tadalafila Europharma*
+Cx com 30 comprimidos 5mg/cp — R$20`,
+
+  mistos: `✅️ *Mix 6 - Pharmacom Farmacêutica* 🇮🇳
+500mg/ml
+1️⃣ Masteron Enantato 200mg/ml
+2️⃣ Enantato de Testosterona 200mg/ml
+3️⃣ Trembolona Enantato 100mg/ml
+📌 Frasco 10ml — R$780
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Cutstack - Muscle Labs* 🐉
+200mg/ml
+1️⃣ Trembolona Enantato 50mg
+2️⃣ Testosterona Cipionato 100mg
+3️⃣ Masteron 50mg
+📌 Frasco 10ml — R$230`,
 };
 
 
