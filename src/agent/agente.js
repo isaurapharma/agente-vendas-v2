@@ -140,13 +140,13 @@ function calcularFrete(endereco) {
 
 // ── System Prompt do Luiz ─────────────────────
 function buildSystemPrompt(foraDoHorario = false, msgHorario = "") {
-  const pixKey  = process.env.PIX_KEY;
-  const pixName = process.env.PIX_NAME;
+  const pixKey  = process.env.PIX_KEY  || 'luaraneves91@hotmail.com';
+  const pixName = process.env.PIX_NAME || 'Izaura Macena';
 
   return `Você é o Luiz, vendedor da loja. Não é um robô, não é um agente — é o Luiz mesmo.
 
 ⚠️ REGRA MÁXIMA PRIORIDADE — LEIA ANTES DE QUALQUER OUTRA COISA:
-Qualquer pergunta sobre produto, preço, ou disponibilidade ("tem X?", "qual o preço de Y?", "manda a tabela de Z") EXIGE chamar a ferramenta buscar_produto, consultar_estoque ou enviar_catalogo ANTES de responder qualquer coisa pro cliente. Você NUNCA responde de cabeça sobre preço ou estoque sem checar a ferramenta primeiro, mesmo que ache que sabe a resposta.
+Qualquer pergunta sobre produto, preço, ou disponibilidade ("tem X?", "qual o preço de Y?", "manda a tabela de Z") EXIGE chamar enviar_catalogo ou consultar_preco_catalogo ANTES de responder qualquer coisa pro cliente. Você NUNCA responde de cabeça sobre preço sem checar o catálogo primeiro.
 PROIBIDO terminantemente dizer frases como "problema no sistema", "já resolvo isso", "tá com erro aqui", "perrengue", "dando uma travada", "deu uma bugada" ou qualquer desculpa genérica/informal sobre dificuldade técnica — isso nunca é uma resposta válida pro cliente. Quando precisar acionar o Luiz humano, a frase de transição é sempre simples e neutra, tipo "só um minutinho!" — nunca uma desculpa inventada sobre o motivo técnico.
 
 PERSONALIDADE:
@@ -205,7 +205,27 @@ CATÁLOGO E ESTOQUE — REGRA SIMPLIFICADA E À PROVA DE FALHA:
 
 ⚠️ FONTE DE PREÇO — REGRA ABSOLUTA: o preço de venda pro cliente é SEMPRE o que vem de enviar_catalogo. NUNCA, em hipótese alguma, informa um preço vindo de consultar_estoque, buscar_produto ou listar_produtos — essas ferramentas servem só pra checar quantidade/disponibilidade na planilha interna, e a planilha NÃO tem preço de venda confiável. Se por algum motivo um valor numérico aparecer perto de "custo" ou "preço" nessas ferramentas, ele é só referência de custo interno e NUNCA deve ser repassado pro cliente como preço.
 
-- Quando o cliente perguntar preço, tabela, ou se "tem" um produto que existe nas categorias do catálogo (durateston, enantato, masteron, primobolan, deca, trembolona, oxandrolona, peptideos, gh, emagrecedores, dianabol, hemogenim, deposteron, boldenona, stanozolol, diversos, mistos, e possivelmente outras categorias novas que o Luiz humano tenha cadastrado): SEMPRE chama enviar_catalogo com a categoria certa. Isso nunca falha e sempre deve ser feito — é a ação prioritária e obrigatória pra esse tipo de pergunta.
+MAPEAMENTO DE PRODUTOS POR CATEGORIA (use isso pra saber qual categoria chamar):
+- durateston → Durateston (todas as marcas)
+- enantato → Enantato de Testosterona
+- masteron → Masteron (Propionato e Enantato, todas as marcas)
+- primobolan → Primobolan
+- deca → Deca Durabolin
+- trembolona → Trembolona (Acetato e Enantato)
+- oxandrolona → Oxandrolona (Anavar)
+- peptideos → Peptídeos (BPC-157, TB500, Ipamorelin, GHK-Cu, etc)
+- gh → GH Somatropina
+- emagrecedores → Retatrutida, Ozempic, Tirzepatida, Mounjaro, Lipoless, TG, Clembuterol, Lipostabil
+- dianabol → Dianabol (todas as marcas)
+- hemogenim → Hemogenim (todas as marcas)
+- deposteron → Deposteron (todas as marcas)
+- boldenona → Boldenona (todas as marcas)
+- stanozolol → Stanozolol (injetável e oral)
+- diversos → Roaccutan, Ritalina, Anastrozol, Tamoxifeno, Tadalafila
+- mistos → Mix 6, Cutstack
+
+- Quando o cliente perguntar preço, tabela, ou se "tem" um produto: consulta o mapeamento acima pra identificar a categoria correta e chama enviar_catalogo ou consultar_preco_catalogo com ela. NUNCA aciona o Luiz humano antes de consultar o mapeamento e tentar encontrar o produto.
+- REGRA ABSOLUTA: se o produto está no catálogo (qualquer categoria — remédio, hormônio, emagrecedor, qualquer coisa), a IA fecha a venda SOZINHA sem acionar o Luiz em nenhum momento do fluxo. O Luiz só é acionado se o produto NÃO existir em nenhuma categoria do catálogo.
 - Se o produto perguntado NÃO bater com nenhuma das categorias fixas conhecidas acima: ANTES de concluir que não existe ou acionar o Luiz humano, chama listar_categorias_disponiveis pra ver se existe uma categoria nova (ex: "diversos") que cobre esse produto. Categorias novas são comuns, o Luiz humano cadastra direto pelo Admin a qualquer momento.
 - Se mesmo depois de checar listar_categorias_disponiveis o produto realmente não existir em nenhuma categoria: NUNCA diz "não tenho", "não encontrei" ou "não temos esse produto" pro cliente. Em vez disso, responde algo como "vou verificar pra você!" (ou variação curta natural) e usa acionar_luiz_humano explicando no motivo qual produto o cliente perguntou.
 - O catálogo já vem com a marcação "❌ EM FALTA" ao lado de qualquer item que estiver sem estoque no momento — você não precisa consultar nada a mais, só manda a tabela e ela já mostra a disponibilidade real de cada marca/variação.
@@ -242,8 +262,7 @@ PAGAMENTO:
 LUIZ HUMANO:
 - Quando precisar acionar o Luiz humano (frete desconhecido ou situação complexa): diz "só um minuto!" e usa a ferramenta acionar_luiz_humano
 - EXCEÇÃO IMPORTANTE: se existir uma REGRA EXTRA DEFINIDA PELO LUIZ HUMANO (seção mais abaixo) com uma frase específica pra um tipo de situação (ex: retirada, agendamento, etc), usa SEMPRE a frase específica da regra extra em vez do genérico "só um minuto!" — regra extra específica tem prioridade sobre a regra genérica daqui. Responde com a frase ensinada E TAMBÉM chama acionar_luiz_humano na mesma resposta, não troca um pelo outro.
-- Após Luiz humano intervir: aguarda 15 minutos sem responder após última msg do cliente
-- Depois retoma normalmente
+- Após Luiz humano intervir: aguarda 3 minutos desde a última msg do Luiz antes de retomar. Se o cliente chamar de novo após 3 minutos, responde normalmente independente do Luiz ter respondido ou não.
 
 CONTEXTO E DÚVIDAS — REGRA CRÍTICA:
 - Quando o cliente chega falando algo que pressupõe contexto anterior (ex: "vc enviou o produto lá?", "ficou pra quando?", "qto ficou aquilo?"), SEMPRE primeiro procura no histórico da conversa se já tem essa informação antes de responder.
@@ -284,65 +303,13 @@ ${(() => {
 // ── Ferramentas ───────────────────────────────
 const TOOLS = [
   {
-    name: 'listar_produtos',
-    description: 'Lista todos os produtos disponíveis em estoque.',
-    input_schema: { type: 'object', properties: {}, required: [] }
-  },
-  {
-    name: 'buscar_produto',
-    description: 'Busca produto pelo nome (busca parcial, resolve apelidos).',
-    input_schema: {
-      type: 'object',
-      properties: {
-        termo: { type: 'string', description: 'Nome ou apelido do produto' }
-      },
-      required: ['termo']
-    }
-  },
-  {
-    name: 'consultar_estoque',
-    description: 'Consulta a QUANTIDADE em estoque de um produto específico. NÃO retorna preço de venda — preço de venda vem sempre de enviar_catalogo.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        produto: { type: 'string', description: 'Nome exato ou ID do produto' }
-      },
-      required: ['produto']
-    }
-  },
-  {
-    name: 'baixar_estoque',
-    description: 'Dá baixa no estoque após PIX confirmado.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        produto:    { type: 'string' },
-        quantidade: { type: 'number' }
-      },
-      required: ['produto', 'quantidade']
-    }
-  },
-  {
-    name: 'entrar_estoque',
-    description: 'Dá entrada de produtos no estoque (dono da loja).',
-    input_schema: {
-      type: 'object',
-      properties: {
-        produto:    { type: 'string' },
-        quantidade: { type: 'number' },
-        preco:      { type: 'number' }
-      },
-      required: ['produto', 'quantidade']
-    }
-  },
-  {
     name: 'listar_categorias_disponiveis',
-    description: 'Lista todas as categorias de produto que existem no catálogo agora, incluindo categorias novas que o Luiz humano cadastrou (ex: "diversos", ou qualquer nome novo). Use isso quando o cliente perguntar sobre um produto que não está na lista fixa conhecida (durateston, masteron, etc) — ANTES de concluir que não existe ou acionar o Luiz humano, sempre confira aqui primeiro se existe uma categoria nova que cobre esse produto.',
+    description: 'Lista todas as categorias de produto que existem no catálogo agora, incluindo categorias novas cadastradas pelo Luiz. Use quando o cliente perguntar sobre um produto que não está na lista fixa conhecida — ANTES de concluir que não existe ou acionar o Luiz.',
     input_schema: { type: 'object', properties: {}, required: [] }
   },
   {
     name: 'enviar_catalogo',
-    description: 'Envia a tabela/catálogo de um produto específico para o cliente, no formato exato das mensagens prontas. Use quando o cliente perguntar preço ou pedir a tabela. NÃO use pra consultar preço internamente no fechamento de pedido — pra isso use consultar_preco_catalogo.',
+    description: 'Envia a tabela/catálogo de um produto específico para o cliente. Use quando o cliente perguntar preço ou pedir a tabela. NÃO use pra consultar preço internamente no fechamento de pedido — pra isso use consultar_preco_catalogo.',
     input_schema: {
       type: 'object',
       properties: {
@@ -356,7 +323,7 @@ const TOOLS = [
   },
   {
     name: 'consultar_preco_catalogo',
-    description: 'Consulta o conteúdo da tabela de uma categoria INTERNAMENTE, sem enviar nada pro cliente. Use no fechamento de pedido pra ler o preço exato do produto antes de calcular o total. Nunca use enviar_catalogo pra isso.',
+    description: 'Consulta o conteúdo da tabela de uma categoria INTERNAMENTE, sem enviar nada pro cliente. Use no fechamento de pedido pra ler o preço exato do produto antes de calcular o total.',
     input_schema: {
       type: 'object',
       properties: {
@@ -370,26 +337,14 @@ const TOOLS = [
   },
   {
     name: 'calcular_frete',
-    description: 'Calcula o frete com base no BAIRRO do cliente (não no endereço completo). SEMPRE confirme/pergunte o bairro explicitamente ao cliente antes de chamar essa ferramenta, mesmo que ele já tenha mandado rua e número — sem o nome do bairro não dá pra calcular.',
+    description: 'Calcula o frete com base no BAIRRO do cliente. SEMPRE confirme o bairro com o cliente antes de chamar essa ferramenta.',
     input_schema: {
       type: 'object',
       properties: {
-        bairro: { type: 'string', description: 'Nome do bairro, confirmado com o cliente' },
-        endereco: { type: 'string', description: 'Endereço completo (rua, número), se disponível, apenas para registro' }
+        bairro:   { type: 'string', description: 'Nome do bairro confirmado com o cliente' },
+        endereco: { type: 'string', description: 'Endereço completo, se disponível' }
       },
       required: ['bairro']
-    }
-  },
-  {
-    name: 'cotar_correios',
-    description: 'Cota o frete pelos Correios (PAC e SEDEX) a partir do CEP do cliente. CEP de origem: Copacabana (22020-000).',
-    input_schema: {
-      type: 'object',
-      properties: {
-        cepDestino: { type: 'string', description: 'CEP do cliente (só números)' },
-        pesoGramas: { type: 'number', description: 'Peso do pedido em gramas (padrão 300g por frasco)' }
-      },
-      required: ['cepDestino']
     }
   },
   {
@@ -459,31 +414,6 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
     // do agente de vendas. A planilha serve só pra controle de estoque
     // (quantidade) — o preço de venda é SEMPRE o do catálogo
     // (enviar_catalogo), nunca o custo/preço interno da planilha.
-    case 'listar_produtos': {
-      const lista = estoque.listarProdutos().map(removerPrecoDaResposta);
-      return { resultado: lista.length ? lista : 'Nenhum produto disponível.' };
-    }
-
-    case 'buscar_produto': {
-      const encontrados = estoque.buscarProduto(input.termo).map(removerPrecoDaResposta);
-      return { resultado: encontrados.length ? encontrados : `Nenhum produto encontrado para "${input.termo}".` };
-    }
-
-    case 'consultar_estoque': {
-      const prod = estoque.consultarEstoque(input.produto);
-      return { resultado: prod ? removerPrecoDaResposta(prod) : `Produto "${input.produto}" não encontrado.` };
-    }
-
-    case 'baixar_estoque': {
-      const r = estoque.baixarEstoque(input.produto, input.quantidade);
-      return { resultado: r };
-    }
-
-    case 'entrar_estoque': {
-      const r = estoque.entrarEstoque(input.produto, input.quantidade, input.preco || null);
-      return { resultado: r };
-    }
-
     case 'listar_categorias_disponiveis': {
       return { resultado: catalogo.listarCategorias() };
     }
@@ -496,9 +426,6 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
     }
 
     case 'consultar_preco_catalogo': {
-      // Retorna o texto da categoria pra IA ler internamente e extrair
-      // o preço do produto específico — SEM enviar nada pro cliente.
-      // Usar isso no fechamento de pedido, não o enviar_catalogo.
       const cat = catalogo.getCategoria(input.categoria.toLowerCase());
       if (!cat) return { resultado: `Categoria "${input.categoria}" não encontrada no catálogo.` };
       return { resultado: cat };
@@ -512,44 +439,6 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
         return { resultado: { frete: null, precisaAcionarLuiz: true, mensagem: `Bairro "${input.bairro}" fora da zona de frete fixo cadastrada. Acionar Luiz humano para cotar.` } };
       }
       return { resultado: { frete, bairro: input.bairro } };
-    }
-
-    case 'cotar_correios': {
-      const cepOrigem = '22020000';
-      const cepDestino = input.cepDestino.replace(/\D/g, '');
-      const peso = input.pesoGramas || 300;
-
-      try {
-        const servicos = ['04669', '40010'];
-        const resultados = [];
-
-        for (const servico of servicos) {
-          const url = `http://ws.correios.com.br/calculador/CalcPrecoPrazo.asmx/CalcPrecoPrazo?nCdEmpresa=&sDsSenha=&nCdServico=${servico}&sCepOrigem=${cepOrigem}&sCepDestino=${cepDestino}&nVlPeso=${peso/1000}&nCdFormato=1&nVlComprimento=16&nVlAltura=12&nVlLargura=14&sCdMaoPropria=n&nVlValorDeclarado=0&sCdAvisoRecebimento=n&StrRetorno=xml&nIndicaCalculo=3`;
-
-          const res = await fetch(url);
-          const xml = await res.text();
-
-          const valorMatch = xml.match(/<Valor>(.*?)<\/Valor>/);
-          const prazoMatch = xml.match(/<PrazoEntrega>(.*?)<\/PrazoEntrega>/);
-          const erroMatch  = xml.match(/<MsgErro>(.*?)<\/MsgErro>/);
-
-          if (valorMatch && prazoMatch && !erroMatch?.[1]) {
-            const nome = servico === '40010' ? 'SEDEX' : 'PAC';
-            const valor = valorMatch[1].replace(',', '.');
-            const prazo = prazoMatch[1];
-            resultados.push({ servico: nome, valor: parseFloat(valor), prazo: `${prazo} dias úteis` });
-          }
-        }
-
-        if (resultados.length === 0) {
-          return { resultado: { ok: false, erro: 'Não foi possível cotar. Acionar Luiz humano.' } };
-        }
-
-        return { resultado: { ok: true, opcoes: resultados } };
-
-      } catch (err) {
-        return { resultado: { ok: false, erro: 'Erro ao consultar Correios. Acionar Luiz humano.' } };
-      }
     }
 
     case 'acionar_luiz_humano': {
@@ -604,8 +493,8 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
     }
 
     case 'enviar_pix': {
-      const pixKey  = process.env.PIX_KEY;
-      const pixName = process.env.PIX_NAME;
+      const pixKey  = process.env.PIX_KEY  || 'luaraneves91@hotmail.com';
+      const pixName = process.env.PIX_NAME || 'Izaura Macena';
 
       let total = Number(input.total);
       let descontoAplicado = 0;
