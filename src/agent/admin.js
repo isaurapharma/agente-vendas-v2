@@ -453,12 +453,13 @@ const TOOLS_ADMIN = [
   },
   {
     name: 'definir_desconto_cliente',
-    description: 'Define um desconto percentual fixo para um cliente específico pelo número.',
+    description: 'Define um desconto para um cliente específico pelo número. Pode ser permanente (fica sempre) ou pontual (só pra próxima compra, some depois de usar). Use quando Luiz falar "dá X% de desconto pro cliente Y" (permanente) ou "dá X% só nessa compra pro cliente Y" (pontual).',
     input_schema: {
       type: 'object',
       properties: {
-        numero:           { type: 'string' },
-        descontoPercentual: { type: 'number', description: 'Ex: 10 para 10%' }
+        numero:             { type: 'string' },
+        descontoPercentual: { type: 'number', description: 'Ex: 10 para 10%' },
+        pontual:            { type: 'boolean', description: 'true = só pra próxima compra (some depois de usar). false ou omitido = permanente.' }
       },
       required: ['numero', 'descontoPercentual']
     }
@@ -702,9 +703,13 @@ async function executarFerramentaAdmin(nome, input) {
 
     case 'definir_desconto_cliente': {
       const n = limparNumeroAdmin(input.numero);
-      _refs.clientesEspeciais[n] = { ..._refs.clientesEspeciais[n], desconto: input.descontoPercentual };
+      _refs.clientesEspeciais[n] = {
+        ..._refs.clientesEspeciais[n],
+        desconto: input.descontoPercentual,
+        descontoPontual: input.pontual === true
+      };
       salvarEstadoAdminNoDisco();
-      return { resultado: { ok: true, numero: n, desconto: input.descontoPercentual } };
+      return { resultado: { ok: true, numero: n, desconto: input.descontoPercentual, pontual: input.pontual === true } };
     }
 
     case 'marcar_cliente_vip': {
@@ -897,6 +902,14 @@ module.exports.registrarPedidoNoRelatorio = function (pedido) {
 };
 module.exports.getClienteEspecial = function (numero) {
   return _refs.clientesEspeciais?.[limparNumeroAdmin(numero)] || null;
+};
+module.exports.zerarDescontoPontual = function (numero) {
+  const n = limparNumeroAdmin(numero);
+  if (_refs.clientesEspeciais?.[n]) {
+    delete _refs.clientesEspeciais[n].desconto;
+    delete _refs.clientesEspeciais[n].descontoPontual;
+    salvarEstadoAdminNoDisco();
+  }
 };
 module.exports.getRegrasExtras = function () {
   return _refs.regrasExtras?.texto || '';
