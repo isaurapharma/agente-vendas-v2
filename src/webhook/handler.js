@@ -340,11 +340,28 @@ async function notificarEntrega(messageId) {
 
   console.log(`[Entrega] 👍 detectado! Notificando cliente ${pedido.clienteNumero}`);
 
+  // Dá baixa no estoque agora que entrega foi confirmada pelo Luiz (joinha)
+  try {
+    const estoqueAdmin = require('../stock/estoque-admin');
+    if (Array.isArray(pedido.itens)) {
+      for (const item of pedido.itens) {
+        estoqueAdmin.registrarSaida(
+          item.nome,
+          item.quantidade || 1,
+          pedido.clienteNome || pedido.clienteNumero,
+          'normal'
+        );
+      }
+    }
+  } catch (err) {
+    console.error('[Entrega] Erro ao dar baixa no estoque:', err.message);
+  }
+
   const clienteJid = `${pedido.clienteNumero}@s.whatsapp.net`;
   await enviarTexto(clienteJid,
     `✅️ Está entregue!\n\n` +
     `🚨Por favor, confira o pedido no mesmo dia! Não nos responsabilizamos por danos após o dia da entrega.\n\n` +
-    `*MUITO OBRIGADO E BONS GANHOS!* 💪😄`
+    `*MUITO OBRIGADO E BONS GANHOS!* 💪`
   );
 
   pedidosDespachados.delete(messageId);
