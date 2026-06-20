@@ -550,9 +550,20 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
 
       await enviarTexto(grupoEntrega, msg);
 
-      // Avisa o grupo Admin que um pedido foi confirmado e despachado,
-      // pro Luiz humano saber que tem pedido novo e poder checar se
-      // está tudo certo no grupo de entrega.
+      // Registra saída automática no estoque pra cada item do pedido
+      try {
+        const estoqueAdmin = require('../stock/estoque-admin');
+        for (const item of input.itens) {
+          estoqueAdmin.registrarSaida(
+            item.nome,
+            item.quantidade || 1,
+            input.clienteNome || input.clienteNumero,
+            'normal'
+          );
+        }
+      } catch (_) {}
+
+      // Avisa o grupo Admin que um pedido foi confirmado e despachado
       const grupoAdminAviso = process.env.ADMIN_GROUP_JID;
       if (grupoAdminAviso) {
         try {
@@ -575,7 +586,7 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
       await enviarTexto(clienteNumero,
         `✅️ Está entregue!\n\n` +
         `🚨Por favor, confira o pedido no mesmo dia! Não nos responsabilizamos por danos após o dia da entrega.\n\n` +
-        `*MUITO OBRIGADO E BONS GANHOS!* 💪😄`
+        `*MUITO OBRIGADO E BONS GANHOS!* 💪`
       );
 
       limparCarrinho(clienteNumero);
