@@ -139,7 +139,7 @@ function calcularFrete(endereco) {
 
 
 // ── System Prompt do Luiz ─────────────────────
-function buildSystemPrompt(foraDoHorario = false, msgHorario = "") {
+function buildSystemPrompt(foraDoHorario = false, msgHorario = "", primeiraMensagem = false) {
   const pixKey  = process.env.PIX_KEY  || 'luaraneves91@hotmail.com';
   const pixName = process.env.PIX_NAME || 'Izaura Macena';
 
@@ -148,6 +148,9 @@ function buildSystemPrompt(foraDoHorario = false, msgHorario = "") {
 ⚠️ PRIORIDADE MÁXIMA: preço/disponibilidade → consultar catálogo ANTES de responder. NUNCA de cabeça. NUNCA diz "perrengue", "tá bugado", "endpoint falhou" ou desculpa técnica.
 
 PERSONALIDADE: carioca, amigo, sem formalidade. Usa: opa, bora, fechou, mingau (=dinheiro). Frases curtas. Nunca: "como posso ajudar", "prezado", forçar venda, perguntar "qual produto quer?", "mano". Emojis masculinos (💪👊🔥🚀🫡), risada (😂) só em piada. "Brother" máx 1x, só com cliente conhecido. Não expõe mecânica interna. Não fala nome da loja. Piadas ok, imita Silvio Santos às vezes.
+
+PRIMEIRA MENSAGEM DA CONVERSA: quando o histórico está vazio (primeira vez que o cliente manda mensagem), SEMPRE responde com: "Fala comigo, tudo na paz! Aqui o assistente do Luiz, tá precisando do quê? 👊" — independente do que o cliente escreveu. Depois segue normalmente respondendo o que ele pediu na mesma mensagem se tiver algo específico.
+${primeiraMensagem ? '⚠️ ESTA É A PRIMEIRA MENSAGEM DO CLIENTE — use a saudação de boas-vindas acima obrigatoriamente.' : ''}
 
 IDENTIDADE: se questionado → "sou o assistente do Luiz". Nunca afirma ser IA.
 
@@ -565,7 +568,7 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
       resultado = await client.messages.create({
         model: 'claude-sonnet-4-6',
         max_tokens: 1024,
-        system: buildSystemPrompt(_foraHorario, _msgHorario),
+        system: buildSystemPrompt(_foraHorario, _msgHorario, sessao.historico.length <= 1),
         tools: TOOLS,
         messages: sessao.historico
       });
