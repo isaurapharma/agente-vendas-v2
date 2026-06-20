@@ -265,8 +265,8 @@ PAGAMENTO:
 - Após cliente querer fechar: passa o valor do produto primeiro
 - Quando cliente confirmar: soma com frete e usa a ferramenta enviar_pix
 - PIX enviado em duas mensagens separadas (instruções + chave sozinha pra copiar fácil)
-- CONFIRMAÇÃO DE PAGAMENTO — RECONHECE SOZINHO, SEM PRECISAR DO LUIZ HUMANO: quando o cliente mandar um comprovante (foto/imagem, mesmo que a legenda venha vazia tipo "[COMPROVANTE DE PAGAMENTO ENVIADO]"), ou confirmar por texto que já pagou/fez o PIX/transferiu (ex: "pronto", "paguei", "já caiu?", "mandei"), considera o pagamento confirmado direto e chama despachar_pedido automaticamente — não precisa esperar confirmação manual do Luiz humano pra isso.
-- Só chama despachar_pedido APÓS esse reconhecimento de pagamento confirmado (nunca antes).
+- CONFIRMAÇÃO DE PAGAMENTO: só chama despachar_pedido quando o cliente mandar um comprovante REAL — imagem, PDF ou texto de compartilhamento do banco (aquele texto formatado que vem direto do app com dados da transação). Se o cliente disser só "paguei", "mandei", "já fiz" SEM mandar nenhum comprovante: responde pedindo o comprovante ("manda o comprovante pra mim! 🫡"). Nunca despacha só com palavras, sempre exige o arquivo/imagem/texto do banco.
+- Só chama despachar_pedido APÓS receber o comprovante (nunca antes).
 
 LUIZ HUMANO:
 - Quando precisar acionar o Luiz humano (frete desconhecido ou situação complexa): diz "só um minuto!" e usa a ferramenta acionar_luiz_humano
@@ -386,7 +386,7 @@ const TOOLS = [
   },
   {
     name: 'despachar_pedido',
-    description: 'Reconhece a confirmação de pagamento do cliente (comprovante/foto, ou texto confirmando que pagou/enviou o PIX) e envia o pedido pro grupo de entrega automaticamente, sem precisar de validação manual do Luiz humano. Não inclui valores nem a chave PIX na mensagem pro grupo de entrega — só produto, cliente e endereço.',
+    description: 'Despacha o pedido pro grupo de entrega após receber comprovante real do cliente (imagem, PDF ou texto do banco). Avisa o Admin pra Luiz confirmar se o PIX está correto. NUNCA chamar sem ter recebido comprovante real.',
     input_schema: {
       type: 'object',
       properties: {
@@ -554,26 +554,14 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
 
       await enviarTexto(grupoEntrega, msg);
 
-      // Registra saída automática no estoque pra cada item do pedido
-      try {
-        const estoqueAdmin = require('../stock/estoque-admin');
-        for (const item of input.itens) {
-          estoqueAdmin.registrarSaida(
-            item.nome,
-            item.quantidade || 1,
-            input.clienteNome || input.clienteNumero,
-            'normal'
-          );
-        }
-      } catch (_) {}
-
-      // Avisa o grupo Admin que um pedido foi confirmado e despachado
+      // Avisa o Admin pra Luiz verificar se o PIX está correto
       const grupoAdminAviso = process.env.ADMIN_GROUP_JID;
       if (grupoAdminAviso) {
         try {
           await enviarTexto(grupoAdminAviso,
-            `✅ Pedido confirmado e enviado pro grupo de entrega!\n` +
-            `Cliente: ${input.clienteNome || clienteNumero}`
+            `✅ Pedido despachado!\n` +
+            `Cliente: ${input.clienteNome || clienteNumero}\n\n` +
+            `⚠️ *Luiz, confirma se o PIX está correto no app do banco antes da entrega!*`
           );
         } catch (_) {}
       }
