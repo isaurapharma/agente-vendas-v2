@@ -4,7 +4,8 @@
 
 const Anthropic = require('@anthropic-ai/sdk');
 const estoque   = require('../stock/estoque');
-const catalogo  = require('../stock/catalogo');
+const catalogo      = require('../stock/catalogo');
+const estoqueAdmin  = require('../stock/estoque-admin');
 const { adicionarApelidos, removerApelidos, verApelidos, listarTodosApelidos } = require('../stock/apelidos');
 const { adicionarContato, removerContato, listarContatos } = require('../stock/contatos');
 const fs   = require('fs');
@@ -150,7 +151,7 @@ QUEM FALA COM VOCÊ:
 
 O QUE VOCÊ PODE FAZER (use as ferramentas disponíveis):
 1. Bloquear/desbloquear números de telefone e grupos de WhatsApp — o agente de vendas (Luiz IA) nunca responde quem está bloqueado.
-2. Consultar e editar ESTOQUE (quantidade física, não preço de venda): ver produtos, quantidades; dar entrada ou saída manual.
+2. Controle de ESTOQUE: registrar entrada de produtos ("chegou 10 Masteron Cooper" → registrar_entrada_estoque), registrar saída/venda ("vendeu 2 Durateston Lander" → registrar_saida_estoque), ver estoque atual ("como tá o estoque?" → relatorio_estoque), ver vendas do dia ("o que vendeu hoje?" → relatorio_vendas_dia), buscar venda por cliente ("registrou a venda do Fernando?" → buscar_venda_cliente). O sistema usa a tradução de siglas — você pode falar o nome do produto normalmente que ela encontra.
 3. Editar o CATÁLOGO de preço de venda (cliente final e revenda): substituir tabela de uma categoria inteira, marcar item específico em/fora de falta, ver ou listar categorias.
 4. Consultar pedidos/vendas do dia, histórico de vendas.
 5. Ajustar regras e comportamento do Luiz vendedor (tom de voz, frases ou emojis proibidos, novas instruções) — isso se aplica em tempo real na próxima mensagem que ele responder.
@@ -251,6 +252,53 @@ const TOOLS_ADMIN = [
     name: 'restaurar_catalogo_padrao',
     description: 'Restaura o catálogo de cliente final para o padrão original do código, apagando qualquer edição salva em disco. Use quando o Luiz humano pedir "restaura o catálogo", "volta pro padrão" ou similar.',
     input_schema: { type: 'object', properties: {}, required: [] }
+  },
+  {
+    name: 'registrar_entrada_estoque',
+    description: 'Registra chegada de produtos no estoque. Use quando o Luiz falar "chegou X unidades de [produto]" ou "dá entrada em X [produto]". O sistema usa a tradução das siglas pra encontrar o produto pelo nome.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        produto:    { type: 'string', description: 'Nome do produto (ex: "Masteron Cooper", "Durateston Lander Land", "M. C")' },
+        quantidade: { type: 'number', description: 'Quantidade que chegou' }
+      },
+      required: ['produto', 'quantidade']
+    }
+  },
+  {
+    name: 'registrar_saida_estoque',
+    description: 'Registra saída de produtos do estoque (venda). Use quando o Luiz falar "vendeu X [produto]" ou encaminhar finalização de venda. Pode incluir nome do cliente e tipo de venda (normal ou revendedor).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        produto:    { type: 'string', description: 'Nome do produto (ex: "Masteron Cooper", "Durateston Lander Land")' },
+        quantidade: { type: 'number', description: 'Quantidade vendida' },
+        cliente:    { type: 'string', description: 'Nome do cliente (opcional, pra consultas futuras)' },
+        tipoVenda:  { type: 'string', description: '"normal" ou "revendedor"', enum: ['normal', 'revendedor'] }
+      },
+      required: ['produto', 'quantidade']
+    }
+  },
+  {
+    name: 'relatorio_estoque',
+    description: 'Mostra o estoque atual de todos os produtos com quantidade disponível. Use quando o Luiz pedir "como tá o estoque", "relatório de estoque" ou similar.',
+    input_schema: { type: 'object', properties: {}, required: [] }
+  },
+  {
+    name: 'relatorio_vendas_dia',
+    description: 'Mostra todas as vendas registradas no dia atual. Use quando o Luiz pedir "relatório de vendas", "o que vendeu hoje" ou similar.',
+    input_schema: { type: 'object', properties: {}, required: [] }
+  },
+  {
+    name: 'buscar_venda_cliente',
+    description: 'Busca vendas registradas pelo nome do cliente. Use quando o Luiz perguntar "registrou a venda do Fernando?" ou "tem venda do [nome]?".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        cliente: { type: 'string', description: 'Nome do cliente pra buscar' }
+      },
+      required: ['cliente']
+    }
   },
   {
     name: 'substituir_categoria_catalogo_revenda',
@@ -518,6 +566,31 @@ async function executarFerramentaAdmin(nome, input) {
 
     case 'restaurar_catalogo_padrao': {
       const resultado = catalogo.restaurarPadrao();
+      return { resultado };
+    }
+
+    case 'registrar_entrada_estoque': {
+      const resultado = estoqueAdmin.registrarEntrada(input.produto, input.quantidade, input.cliente || null);
+      return { resultado };
+    }
+
+    case 'registrar_saida_estoque': {
+      const resultado = estoqueAdmin.registrarSaida(input.produto, input.quantidade, input.cliente || null, input.tipoVenda || 'normal');
+      return { resultado };
+    }
+
+    case 'relatorio_estoque': {
+      const resultado = estoqueAdmin.relatorioEstoque();
+      return { resultado };
+    }
+
+    case 'relatorio_vendas_dia': {
+      const resultado = estoqueAdmin.relatorioVendas();
+      return { resultado };
+    }
+
+    case 'buscar_venda_cliente': {
+      const resultado = estoqueAdmin.buscarVendaPorCliente(input.cliente);
       return { resultado };
     }
 
