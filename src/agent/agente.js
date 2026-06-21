@@ -786,8 +786,17 @@ async function processarRespostaLuizParaCliente(clienteNumero, clienteNome, text
 module.exports = {
   processarMensagem,
   getSessao,
+  salvarSessoesNoDisco,
   registrarMensagemHumana,
   registrarMensagemDeAviso,
   getClienteDoAviso,
-  processarRespostaLuizParaCliente
+  processarRespostaLuizParaCliente,
+  liberarPausaLuiz(clienteNumero) {
+    // Reseta o timer de pausa pra IA retomar a conversa imediatamente
+    // Usar quando o Admin replica uma mensagem pro cliente via enviar_mensagem_cliente
+    const sessao = getSessao(clienteNumero);
+    sessao.luizHumanoAtivo = false;
+    sessao.luizHumanoUltimaMsg = null;
+    salvarSessoesNoDisco();
+  }
 };
