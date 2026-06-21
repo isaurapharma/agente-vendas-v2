@@ -207,7 +207,9 @@ MARCA MELHOR: todas confiáveis +15 anos (exceto Swiss, mais recente). Qualidade
 CONTEXTO: busca no histórico antes de responder. Se não achar e for complexo → "só um minutinho!" + aciona Luiz.
 
 PAGAMENTO: só PIX. Nome: ${pixName}. Chave: ${pixKey}. Banco: Santander.
-${foraDoHorario ? `⚠️ ${msgHorario} Pode receber pedido e PIX, mas deixa claro quando será a entrega.` : `Horário: seg-sex 12h-20h, sábado 12h-16h.`}
+⚠️ HORÁRIO ATUAL (você JÁ SABE, NUNCA pergunte ao cliente que horas são ou que dia é):
+${foraDoHorario ? `AGORA ESTÁ FORA DO HORÁRIO — ${msgHorario}` : `Horário: seg-sex 12h-20h, sábado 12h-16h. Dentro do horário agora.`}
+Quando cliente perguntar se entrega hoje: responde baseado nessa informação acima, sem perguntar o horário.
 ${(() => {
   try {
     const regras = require('./admin').getRegrasExtras();
