@@ -168,12 +168,18 @@ durateston|enantato|masteron|primobolan|deca|trembolona|oxandrolona|peptideos|gh
 FECHAMENTO DE PEDIDO:
 1. Identifica produto exato — 1 marca = assume direto; 2+ marcas iguais = pergunta qual
 2. consultar_preco_catalogo pra pegar preço (nunca de cabeça)
-3. Pergunta endereço/bairro
+3. Pergunta endereço COMPLETO: rua, número, apto (se tiver), bairro, cidade, CEP
 4. Calcula frete, manda resumo (produto+frete+total)
 5. enviar_pix (2 msgs: resumo + chave PIX sozinha)
 6. Pede comprovante REAL (imagem/PDF/texto banco). Só "paguei" → pede comprovante
 7. Recebeu comprovante → confirma: "Confirmando: [itens] / Endereço: X / Total: R$Y — tá certo? 👊"
-8. Cliente confirma → despachar_pedido
+8. Cliente confirma → despachar_pedido (passa endereço completo pra etiqueta)
+
+GRUPOS DE FORNECEDORES/REVENDEDORES:
+- Mesmo fluxo de atendimento de cliente comum
+- Só envia tabela de preços se o fornecedor pedir explicitamente
+- Até receber tabela específica de fornecedor: se pedirem preço → "só um minuto que vou verificar 🫡" + aciona Luiz
+- Fechamento de pedido igual ao cliente, incluindo etiqueta de endereço completa
 
 ENTREGA/LOCAL:
 - Qualquer local (portaria, academia, trabalho, loja, primo) → "Blz! Me passa endereço completo com bairro 🛵"
@@ -448,34 +454,38 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
     }
 
     case 'despachar_pedido': {
-      const grupoEntrega = process.env.DELIVERY_GROUP_JID;
-      if (!grupoEntrega) return { resultado: { ok: false, erro: 'DELIVERY_GROUP_JID não configurado.' } };
+      const grupoAdmin = process.env.ADMIN_GROUP_JID;
+      if (!grupoAdmin) return { resultado: { ok: false, erro: 'ADMIN_GROUP_JID não configurado.' } };
 
       const itensTexto = input.itens
         .map(i => `📦 ${i.nome}${i.quantidade > 1 ? ` (${i.quantidade}x)` : ''}`)
         .join('\n');
 
-      const msg =
-        `🛵 *PEDIDO — Force Imports*\n\n` +
+      // Etiqueta de endereço formatada pra impressão
+      const endereco = input.enderecoEntrega || '';
+      const etiqueta =
+        `📬 *ETIQUETA DE ENDEREÇO*\n\n` +
+        `Destinatário: ${input.clienteNome || input.clienteNumero}\n` +
+        `${endereco}\n\n` +
+        `📱 ${clienteNumero}`;
+
+      // Resumo do pedido com aviso pro Luiz verificar PIX
+      const resumoPedido =
+        `✅ *PEDIDO CONFIRMADO*\n\n` +
         `👤 *Cliente:* ${input.clienteNome || input.clienteNumero}\n` +
-        `📍 *Endereço:* ${input.enderecoEntrega}\n\n` +
+        `📱 *Número:* ${clienteNumero}\n\n` +
         `${itensTexto}\n\n` +
-        `✅ *PIX confirmado!*`;
+        `⚠️ *Luiz, confirma se o PIX está correto no app do banco antes de despachar!*`;
 
-      await enviarTexto(grupoEntrega, msg);
-
-      // Avisa o Admin pra Luiz verificar se o PIX está correto
-      const grupoAdminAviso = process.env.ADMIN_GROUP_JID;
-      if (grupoAdminAviso) {
-        try {
-          await enviarTexto(grupoAdminAviso,
-            `✅ Pedido despachado!\n` +
-            `Cliente: ${input.clienteNome || clienteNumero}\n\n` +
-            `⚠️ *Luiz, confirma se o PIX está correto no app do banco antes da entrega!*`
-          );
-        } catch (_) {}
+      // Envia etiqueta e resumo pro Admin em mensagens separadas
+      try {
+        await enviarTexto(grupoAdmin, etiqueta);
+        await enviarTexto(grupoAdmin, resumoPedido);
+      } catch (err) {
+        console.error('[Despacho] Erro ao enviar pro Admin:', err.message);
       }
 
+      // Registra pedido pra rastrear o joinha
       try {
         require('./admin').registrarPedidoNoRelatorio({
           clienteNumero,
@@ -485,10 +495,9 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
         });
       } catch (_) {}
 
-      await enviarTexto(clienteNumero,
-        `✅️ Está entregue!\n\n` +
-        `🚨Por favor, confira o pedido no mesmo dia! Não nos responsabilizamos por danos após o dia da entrega.\n\n` +
-        `*MUITO OBRIGADO E BONS GANHOS!* 💪`
+      // Confirma pro cliente que pedido foi recebido
+      await enviarTexto(`${clienteNumero}@s.whatsapp.net`,
+        `✅ Pedido recebido! Assim que confirmarmos o pagamento a gente já separa pra você 🫡`
       );
 
       limparCarrinho(clienteNumero);
@@ -764,4 +773,3 @@ module.exports = {
   getClienteDoAviso,
   processarRespostaLuizParaCliente
 };
-// update 
