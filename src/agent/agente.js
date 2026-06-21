@@ -170,11 +170,10 @@ FECHAMENTO DE PEDIDO:
 2. consultar_preco_catalogo pra pegar preço (nunca de cabeça)
 3. Pergunta bairro pra calcular frete. Se bairro cadastrado = calcula direto. Se não = aciona Luiz pra cotar
 4. Manda resumo (produto+frete+total)
-5. enviar_pix (manda PIX + texto em branco da etiqueta pra cliente preencher — o código já envia automaticamente, NÃO repetir no texto da resposta)
+5. enviar_pix (manda PIX + texto em branco da etiqueta pra cliente preencher — o código já envia automaticamente, NÃO repetir no texto da resposta, NÃO escrever nada após chamar essa ferramenta)
 6. Cliente manda comprovante REAL (imagem/PDF/texto banco) + etiqueta preenchida
 7. Se chegou comprovante mas SEM etiqueta preenchida → pede os dados: "Falta preencher os dados de entrega! 🫡"
-8. Confirma pedido: "Confirmando: [itens] / Total: R$Y — tá certo? 👊"
-9. Cliente confirma → despachar_pedido (lê os dados da etiqueta preenchida pelo cliente)
+8. Recebeu comprovante E etiqueta preenchida → responde "Fechou! 🫡" e chama despachar_pedido direto — NÃO confirma o pedido de novo, já foi confirmado antes
 
 PIX SEM CONTEXTO: se chegar um comprovante/imagem de PIX no chat sem pedido em andamento → pergunta "Esse PIX é referente a quê? 🫡" + aciona Luiz no Admin avisando que chegou PIX sem contexto identificado
 
@@ -467,7 +466,7 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
       );
 
       sessao.aguardandoPix = true;
-      return { resultado: { ok: true, totalCobrado: totalFormatado, descontoAplicado } };
+      return { resultado: { ok: true, totalCobrado: totalFormatado, descontoAplicado, instrucao: 'Mensagens enviadas automaticamente. NÃO escreva mais nada — aguarde o cliente preencher e mandar o comprovante.' } };
     }
 
     case 'despachar_pedido': {
