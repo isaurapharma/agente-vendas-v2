@@ -82,8 +82,6 @@ const GRUPOS_REVENDEDORES = {
   '120363405252871406@g.us': 'Carlos',
   '120363398953557075@g.us': 'Neguett',
   '120363403741398789@g.us': 'Felipe',
-  '120363418454463330@g.us': 'Tribal',
-  '120363022703847296@g.us': 'Zé Rolha',
   '120363419343091632@g.us': 'Raphael Leal',
   '120363305190062448@g.us': 'David',
   '120363420845403813@g.us': 'Big Jeff',
@@ -98,6 +96,9 @@ const GRUPOS_BLOQUEADOS = new Set([
   '120363304267841815@g.us', // Entregas Claudinha
   '120363376341821982@g.us', // Anotações
   '120363404306878361@g.us', // Entregas Vitor
+  '120363022703847296@g.us', // Zé Rolha (bloqueado)
+  '120363375512280777@g.us',
+  '120363418454463330@g.us', // Tribal (bloqueado)
 ]);
 
 // ── Clientes especiais (desconto, VIP, observações) ────────────
