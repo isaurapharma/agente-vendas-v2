@@ -633,7 +633,6 @@ async function executarFerramentaAdmin(nome, input) {
 
     case 'enviar_mensagem_cliente': {
       const { enviarTexto } = require('../webhook/evolution');
-      const { getSessao } = require('../agent/agente');
       const destino = String(input.destino).trim();
       const mensagem = String(input.mensagem).trim();
 
@@ -666,8 +665,10 @@ async function executarFerramentaAdmin(nome, input) {
         // Registra a mensagem no histórico do cliente pra IA ter contexto
         if (numeroDestino) {
           try {
+            const { getSessao, salvarSessoesNoDisco } = require('../agent/agente');
             const sessao = getSessao(numeroDestino);
-            sessao.historico.push({ role: 'assistant', content: `[Luiz via Admin]: ${mensagem}` });
+            sessao.historico.push({ role: 'user', content: `[Mensagem enviada pelo Luiz pro cliente]: ${mensagem}` });
+            salvarSessoesNoDisco();
           } catch (_) {}
         }
 
