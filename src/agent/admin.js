@@ -176,7 +176,7 @@ COMO INTERPRETAR PEDIDOS:
   - "como tá o estoque?" / "quanto vendeu hoje?" → usar ferramentas de consulta e responder com os dados
   - "cria um grupo novo de revendedor, nome Pedro, jid tal" → adicionar_grupo_revendedor
   - "esquece a conversa" / "limpa o histórico" / "começa do zero" → limpar_historico_admin
-  - "responde grupo Ziraldo desconto de 10 mingau" / "fala pro cliente 5521999: frete é R$30" → enviar_mensagem_cliente (busca pelo nome do grupo ou número direto e envia a mensagem lá)
+  - "responde grupo Ziraldo desconto de 10 mingau" / "fala pro cliente 5521999: frete é R$30" → enviar_mensagem_cliente. IMPORTANTE: quando Luiz mandar só um número seguido de mensagem (ex: "5521992671289 enviar desconto de 15 mingau"), isso é um comando pra enviar aquela mensagem pro cliente com aquele número — NÃO é pra bloquear ou outra ação. O número é o destino, o resto é a mensagem.
 - Se a intenção estiver clara, EXECUTE a ferramenta direto e confirme o que foi feito. Não fique pedindo confirmação extra para ações simples e reversíveis (bloqueio, preço, desconto).
 - Se faltar informação crítica (ex: qual número bloquear, qual produto, qual valor), pergunte só o que falta, de forma curta.
 - Sempre que uma ação for executada, responda confirmando objetivamente o que mudou. Ex: "Bloqueado! Esse número não recebe mais resposta." ou "Preço da Trembolona Lander Land atualizado no catálogo."
@@ -821,7 +821,7 @@ async function processarMensagemAdmin(textoMensagem, conteudoMultimodal = null) 
     try {
       resultado = await client.messages.create({
         model: 'claude-sonnet-4-6',
-        max_tokens: 1024,
+        max_tokens: 4096,
         system: buildSystemPromptAdmin(),
         tools: TOOLS_ADMIN,
         messages: historicoAdmin
