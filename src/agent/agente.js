@@ -168,18 +168,21 @@ durateston|enantato|masteron|primobolan|deca|trembolona|oxandrolona|peptideos|gh
 FECHAMENTO DE PEDIDO:
 1. Identifica produto exato — 1 marca = assume direto; 2+ marcas iguais = pergunta qual
 2. consultar_preco_catalogo pra pegar preço (nunca de cabeça)
-3. Pergunta endereço COMPLETO: rua, número, apto (se tiver), bairro, cidade, CEP
-4. Calcula frete, manda resumo (produto+frete+total)
-5. enviar_pix (2 msgs: resumo + chave PIX sozinha)
-6. Pede comprovante REAL (imagem/PDF/texto banco). Só "paguei" → pede comprovante
-7. Recebeu comprovante → confirma: "Confirmando: [itens] / Endereço: X / Total: R$Y — tá certo? 👊"
-8. Cliente confirma → despachar_pedido (passa endereço completo pra etiqueta)
+3. Pergunta bairro pra calcular frete. Se bairro cadastrado = calcula direto. Se não = aciona Luiz pra cotar
+4. Manda resumo (produto+frete+total)
+5. enviar_pix (manda PIX + texto em branco da etiqueta pra cliente preencher)
+6. Cliente manda comprovante REAL (imagem/PDF/texto banco) + etiqueta preenchida
+7. Se chegou comprovante mas SEM etiqueta preenchida → pede os dados: "Falta preencher os dados de entrega! 🫡"
+8. Confirma pedido: "Confirmando: [itens] / Total: R$Y — tá certo? 👊"
+9. Cliente confirma → despachar_pedido (lê os dados da etiqueta preenchida pelo cliente)
+
+PIX SEM CONTEXTO: se chegar um comprovante/imagem de PIX no chat sem pedido em andamento → pergunta "Esse PIX é referente a quê? 🫡" + aciona Luiz no Admin avisando que chegou PIX sem contexto identificado
 
 GRUPOS DE FORNECEDORES/REVENDEDORES:
 - Mesmo fluxo de atendimento de cliente comum
-- Só envia tabela de preços se o fornecedor pedir explicitamente
-- Até receber tabela específica de fornecedor: se pedirem preço → "só um minuto que vou verificar 🫡" + aciona Luiz
-- Fechamento de pedido igual ao cliente, incluindo etiqueta de endereço completa
+- Se pedirem preço e não tiver tabela de revendedor cadastrada → aciona Luiz
+- Se quiserem fechar pedido: segue fluxo normal, mas NÃO exige PIX — assim que revendedor preencher a etiqueta já despacha pro Admin
+- Pedido sem preço se não tiver tabela — envia pro Admin sem valor
 
 ENTREGA/LOCAL:
 - Qualquer local (portaria, academia, trabalho, loja, primo) → "Blz! Me passa endereço completo com bairro 🛵"
@@ -297,12 +300,12 @@ const TOOLS = [
   },
   {
     name: 'despachar_pedido',
-    description: 'Despacha pedido ao grupo de entrega. Só após comprovante REAL (imagem/PDF/texto banco) e confirmação do cliente. Avisa Admin pra Luiz verificar PIX.',
+    description: 'Despacha pedido ao Admin após comprovante REAL e confirmação do cliente. Envia etiqueta de endereço formatada + resumo do pedido. Avisa Luiz pra verificar PIX.',
     input_schema: {
       type: 'object',
       properties: {
-        clienteNome:     { type: 'string' },
-        clienteNumero:   { type: 'string' },
+        clienteNome:     { type: 'string', description: 'Nome do cliente' },
+        clienteNumero:   { type: 'string', description: 'Número do cliente' },
         itens:           {
           type: 'array',
           items: {
@@ -313,9 +316,13 @@ const TOOLS = [
             }
           }
         },
-        enderecoEntrega: { type: 'string' }
+        rua:      { type: 'string', description: 'Rua e número (ex: Rua das Flores, n° 123)' },
+        apto:     { type: 'string', description: 'Apartamento/complemento (opcional)' },
+        bairro:   { type: 'string', description: 'Bairro' },
+        cidade:   { type: 'string', description: 'Cidade' },
+        cep:      { type: 'string', description: 'CEP' }
       },
-      required: ['clienteNumero', 'itens', 'enderecoEntrega']
+      required: ['clienteNumero', 'itens', 'rua', 'bairro', 'cidade', 'cep']
     }
   }
 ];
@@ -448,6 +455,16 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
       );
       await new Promise(r => setTimeout(r, 1000));
       await enviarTexto(clienteNumero, pixKey);
+      await new Promise(r => setTimeout(r, 1000));
+      await enviarTexto(clienteNumero, `Preenche os dados abaixo e manda o comprovante do PIX pra finalizar! 🫡`);
+      await new Promise(r => setTimeout(r, 500));
+      await enviarTexto(clienteNumero,
+        `Destinatário: \n` +
+        `Rua: , n° , Apto \n` +
+        `Bairro: \n` +
+        `Cidade: \n` +
+        `CEP: `
+      );
 
       sessao.aguardandoPix = true;
       return { resultado: { ok: true, totalCobrado: totalFormatado, descontoAplicado } };
@@ -461,13 +478,14 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
         .map(i => `📦 ${i.nome}${i.quantidade > 1 ? ` (${i.quantidade}x)` : ''}`)
         .join('\n');
 
-      // Etiqueta de endereço formatada pra impressão
-      const endereco = input.enderecoEntrega || '';
+      // Etiqueta exatamente no formato para impressão — sem nenhum texto extra
+      const apto = input.apto ? `, Apto ${input.apto}` : '';
       const etiqueta =
-        `📬 *ETIQUETA DE ENDEREÇO*\n\n` +
         `Destinatário: ${input.clienteNome || input.clienteNumero}\n` +
-        `${endereco}\n\n` +
-        `📱 ${clienteNumero}`;
+        `Rua: ${input.rua}${apto}\n` +
+        `Bairro: ${input.bairro}\n` +
+        `Cidade: ${input.cidade}\n` +
+        `CEP: ${input.cep}`;
 
       // Resumo do pedido com aviso pro Luiz verificar PIX
       const resumoPedido =
