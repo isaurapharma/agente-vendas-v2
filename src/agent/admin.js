@@ -663,11 +663,13 @@ async function executarFerramentaAdmin(nome, input) {
         await enviarTexto(jidDestino, mensagem);
 
         // Registra a mensagem no histórico do cliente pra IA ter contexto
+        // e reseta o timer de pausa pra IA poder responder imediatamente
         if (numeroDestino) {
           try {
-            const { getSessao, salvarSessoesNoDisco } = require('../agent/agente');
+            const { getSessao, salvarSessoesNoDisco, liberarPausaLuiz } = require('../agent/agente');
             const sessao = getSessao(numeroDestino);
             sessao.historico.push({ role: 'user', content: `[Mensagem enviada pelo Luiz pro cliente]: ${mensagem}` });
+            liberarPausaLuiz(numeroDestino);
             salvarSessoesNoDisco();
           } catch (_) {}
         }
