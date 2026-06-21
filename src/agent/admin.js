@@ -165,9 +165,9 @@ COMO INTERPRETAR PEDIDOS:
   - "não responde mais esse número 987655909" → bloquear_numero
   - "desbloqueia o numero X" → desbloquear_numero
   - "esse grupo aqui não é pra ela responder" / cita nome de grupo → se a mensagem do Luiz tiver a marcação "[MENSAGEM ENCAMINHADA DE OUTRO CHAT — JID de origem: ...]" no início, use esse JID direto na ferramenta bloquear_grupo, sem precisar perguntar nada. Se não tiver essa marcação, peça pro Luiz encaminhar (forward) qualquer mensagem do grupo que ele quer bloquear direto pra esse chat — não peça "o JID" porque ele pode não saber o que é isso.
-  - "Primobolan tá em falta" / "acabou o X" → marcar_produto_falta (catálogo, NÃO é saída de estoque)
-  - "chegou de novo o X" → marcar_produto_falta com emFalta: false
-  - "atualiza o preço da Trembolona Lander Land pra 220" → marcar_produto_falta ou substituir_categoria_catalogo, dependendo se é um item específico ou a tabela inteira mudou — SEMPRE no catálogo, nunca atualizar_preco (essa é só pra controle de estoque interno)
+  - "Primobolan tá em falta" / "acabou o X" → marcar_produto_falta E marcar_produto_falta_revenda (atualiza as DUAS tabelas simultaneamente — cliente e fornecedor/revendedor)
+  - "chegou de novo o X" → marcar_produto_falta + marcar_produto_falta_revenda com emFalta: false (também nas duas)
+  - "atualiza o preço da Trembolona Lander Land pra 220" → substituir_categoria_catalogo (catálogo cliente) — SEMPRE no catálogo, nunca atualizar_preco
   - "manda essa tabela nova pra substituir Deca" (e cola texto) → substituir_categoria_catalogo
   - "isso é preço de revenda" / "responde como revendedor" → use a versão de revenda das ferramentas de catálogo quando disponível, ou avise no campo correto
   - "Cliente Monique tem desconto de 10%" → definir_desconto_cliente
@@ -176,6 +176,7 @@ COMO INTERPRETAR PEDIDOS:
   - "como tá o estoque?" / "quanto vendeu hoje?" → usar ferramentas de consulta e responder com os dados
   - "cria um grupo novo de revendedor, nome Pedro, jid tal" → adicionar_grupo_revendedor
   - "esquece a conversa" / "limpa o histórico" / "começa do zero" → limpar_historico_admin
+  - "responde grupo Ziraldo desconto de 10 mingau" / "fala pro cliente 5521999: frete é R$30" → enviar_mensagem_cliente (busca pelo nome do grupo ou número direto e envia a mensagem lá)
 - Se a intenção estiver clara, EXECUTE a ferramenta direto e confirme o que foi feito. Não fique pedindo confirmação extra para ações simples e reversíveis (bloqueio, preço, desconto).
 - Se faltar informação crítica (ex: qual número bloquear, qual produto, qual valor), pergunte só o que falta, de forma curta.
 - Sempre que uma ação for executada, responda confirmando objetivamente o que mudou. Ex: "Bloqueado! Esse número não recebe mais resposta." ou "Preço da Trembolona Lander Land atualizado no catálogo."
@@ -342,6 +343,18 @@ const TOOLS_ADMIN = [
     name: 'limpar_historico_admin',
     description: 'Apaga o histórico da conversa atual do Admin, começando do zero. Use quando o Luiz humano pedir algo como "esquece a conversa", "limpa o histórico" ou "começa do zero" — serve pra reduzir custo, já que conversas longas ficam mais caras por mensagem.',
     input_schema: { type: 'object', properties: {}, required: [] }
+  },
+  {
+    name: 'enviar_mensagem_cliente',
+    description: 'Envia uma mensagem do Luiz humano diretamente pro chat de um cliente ou grupo, sem o Luiz precisar ir lá. Use quando Luiz falar "responde [nome/número] [mensagem]" ou "fala pra [cliente] que [mensagem]". Luiz pode repassar cotação de frete, desconto, qualquer info. O agente replica a mensagem no chat do destino.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        destino: { type: 'string', description: 'Número do cliente (ex: 5521999998888) ou nome do grupo (ex: Ziraldo, Big Jeff)' },
+        mensagem: { type: 'string', description: 'Mensagem exata a enviar' }
+      },
+      required: ['destino', 'mensagem']
+    }
   },
   {
     name: 'bloquear_numero',
@@ -614,11 +627,42 @@ async function executarFerramentaAdmin(nome, input) {
     }
 
     case 'limpar_historico_admin': {
-      // Marca pra limpar DEPOIS que a resposta atual for enviada e salva
-      // (ver processarMensagemAdmin) — assim a confirmação da própria
-      // ação ainda chega certinho pro Luiz antes do histórico zerar.
       _limparHistoricoAposResposta = true;
       return { resultado: { ok: true, mensagem: 'Histórico será limpo após esta resposta.' } };
+    }
+
+    case 'enviar_mensagem_cliente': {
+      const { enviarTexto } = require('../webhook/evolution');
+      const destino = String(input.destino).trim();
+      const mensagem = String(input.mensagem).trim();
+
+      // Tenta resolver o destino: pode ser número direto ou nome de grupo
+      let jidDestino = null;
+
+      // Se for número (só dígitos), monta JID de pessoa
+      if (/^\d+$/.test(destino)) {
+        jidDestino = `${destino}@s.whatsapp.net`;
+      } else {
+        // Busca pelo nome do grupo nos grupos de revendedores/fornecedores
+        const gruposRev = _refs.gruposRevendedores || {};
+        for (const [jid, nome] of Object.entries(gruposRev)) {
+          if (nome.toLowerCase().includes(destino.toLowerCase())) {
+            jidDestino = jid;
+            break;
+          }
+        }
+      }
+
+      if (!jidDestino) {
+        return { resultado: { ok: false, erro: `Não encontrei destino "${destino}". Tenta com o número direto (ex: 5521999998888) ou o nome exato do grupo.` } };
+      }
+
+      try {
+        await enviarTexto(jidDestino, mensagem);
+        return { resultado: { ok: true, destino: jidDestino, mensagem } };
+      } catch (err) {
+        return { resultado: { ok: false, erro: err.message } };
+      }
     }
 
     case 'bloquear_numero': {
