@@ -633,14 +633,17 @@ async function executarFerramentaAdmin(nome, input) {
 
     case 'enviar_mensagem_cliente': {
       const { enviarTexto } = require('../webhook/evolution');
+      const { getSessao } = require('../agent/agente');
       const destino = String(input.destino).trim();
       const mensagem = String(input.mensagem).trim();
 
       // Tenta resolver o destino: pode ser número direto ou nome de grupo
       let jidDestino = null;
+      let numeroDestino = null;
 
       // Se for número (só dígitos), monta JID de pessoa
       if (/^\d+$/.test(destino)) {
+        numeroDestino = destino;
         jidDestino = `${destino}@s.whatsapp.net`;
       } else {
         // Busca pelo nome do grupo nos grupos de revendedores/fornecedores
@@ -659,6 +662,15 @@ async function executarFerramentaAdmin(nome, input) {
 
       try {
         await enviarTexto(jidDestino, mensagem);
+
+        // Registra a mensagem no histórico do cliente pra IA ter contexto
+        if (numeroDestino) {
+          try {
+            const sessao = getSessao(numeroDestino);
+            sessao.historico.push({ role: 'assistant', content: `[Luiz via Admin]: ${mensagem}` });
+          } catch (_) {}
+        }
+
         return { resultado: { ok: true, destino: jidDestino, mensagem } };
       } catch (err) {
         return { resultado: { ok: false, erro: err.message } };
