@@ -163,7 +163,7 @@ DISPONIBILIDADE/PREÇO:
 - Produto não encontrado → "vou verificar! 🫡" + aciona Luiz. NUNCA diz "não temos"
 
 MAPEAMENTO CATEGORIAS:
-durateston|enantato|masteron|primobolan|deca|trembolona|oxandrolona|peptideos|gh|emagrecedores(retatrutida/ozempic/tirzepatida/mounjaro/lipoless/tg/clembuterol/lipostabil)|dianabol|hemogenim|deposteron|boldenona|stanozolol|diversos(roaccutan/ritalina/anastrozol/tamoxifeno/tadalafila)|mistos(mix6/cutstack)
+durateston|enantato|masteron|primobolan|deca|trembolona|oxandrolona|peptideos|gh|emagrecedores(retatrutida/ozempic/tirzepatida/mounjaro/lipoless/tg/clembuterol/lipostabil)|dianabol|hemogenim|deposteron|boldenona|stanozolol|diversos(roaccutan/ritalina/anastrozol/tamoxifeno/tadalafila/cabergolina)|mistos(mix6/cutstack)|propionato(testosterona propionato)|npp(nandrolona fenilpropionato)|hcg|turinabol|halotestin|proviron|testosteronagel
 
 FECHAMENTO DE PEDIDO:
 1. Identifica produto exato — 1 marca = assume direto; 2+ marcas iguais = pergunta qual
