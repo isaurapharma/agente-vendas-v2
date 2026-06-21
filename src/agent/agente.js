@@ -170,7 +170,7 @@ FECHAMENTO DE PEDIDO:
 2. consultar_preco_catalogo pra pegar preço (nunca de cabeça)
 3. Pergunta bairro pra calcular frete. Se bairro cadastrado = calcula direto. Se não = aciona Luiz pra cotar
 4. Manda resumo (produto+frete+total)
-5. enviar_pix (manda PIX + texto em branco da etiqueta pra cliente preencher)
+5. enviar_pix (manda PIX + texto em branco da etiqueta pra cliente preencher — o código já envia automaticamente, NÃO repetir no texto da resposta)
 6. Cliente manda comprovante REAL (imagem/PDF/texto banco) + etiqueta preenchida
 7. Se chegou comprovante mas SEM etiqueta preenchida → pede os dados: "Falta preencher os dados de entrega! 🫡"
 8. Confirma pedido: "Confirmando: [itens] / Total: R$Y — tá certo? 👊"
