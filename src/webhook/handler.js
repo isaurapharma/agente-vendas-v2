@@ -19,20 +19,33 @@ const DELIVERY_JID = process.env.DELIVERY_GROUP_JID;
 // O agente NUNCA responde esses números, independente de qualquer coisa.
 // Adicionar/remover via comando BLOQUEAR ADD / BLOQUEAR REMOVE no grupo admin.
 const NUMEROS_BLOQUEADOS = new Set([
-  '5522997487799',
-  '5521972140886',
-  '5521965696252',
-  '5521965184171',
-  '595975183457',
-  '595993461127',
-  '59599209662',
-  '558597470079',
+  '5521964191319',
+  '5521969686730',
+  '5521984517516',
+  '5521999434305',
   '5518981887592',
+  '5585974700079',
+  '595975183457',
+  '5521972790712',
   '595992607680',
-  '5521969926165',
-  '5522999454961',
   '5521982529614',
   '5521981536611',
+  '5521995324342',
+  '5521965696252',
+  '5521980480797',
+  '5521965184171',
+  '5521996881985',
+  '5521978237000',
+  '5521990928899',
+  '5522999917676',
+  '5521964947668',
+  '5521971776922',
+  '5521998162579',
+  '5521982750274',
+  '5521992126548',
+  '5521998030180',
+  '595993461127',
+  '595992097662',
 ]);
 
 function limparNumero(numero) {
@@ -76,6 +89,7 @@ const GRUPOS_REVENDEDORES = {
   '120363420845403813@g.us': 'Big Jeff',
   '120363400248813120@g.us': 'Ziraldo',
   '120363383370702200@g.us': 'DVD',
+  '120363427597386558@g.us': 'Fornecedor',
 };
 
 // ── Grupos administrativos/controle — agente NUNCA responde ────
@@ -195,7 +209,8 @@ async function handleWebhook(req, res) {
       }
 
       // Caso 2: Luiz humano respondendo manualmente direto pro cliente
-      // (fora do grupo Admin) — registra pausa de 3min no agente vendedor.
+      // (fora do grupo Admin) — registra a mensagem no histórico pra IA
+      // ter contexto na volta, além de pausar por 3min.
       if (!ehGrupo(remoteJid)) {
         const numeroCliente = extrairNumero(remoteJid);
         const textoLuiz = await extrairTexto(mensagem);
@@ -239,6 +254,19 @@ async function handleWebhook(req, res) {
 
     let textoMensagem = await extrairTexto(mensagem);
     console.log('[Debug] Texto extraído:', JSON.stringify(textoMensagem));
+
+    // ── Detecta reply (citação) do cliente ────────────────────
+    // Se o cliente respondeu citando uma mensagem específica, inclui
+    // o texto citado no contexto pra IA entender a referência.
+    const contextInfo = mensagem?.message?.extendedTextMessage?.contextInfo ||
+                        mensagem?.message?.imageMessage?.contextInfo ||
+                        mensagem?.message?.documentMessage?.contextInfo ||
+                        mensagem?.message?.contextInfo;
+    const textoMsgCitada = contextInfo?.quotedMessage?.conversation ||
+                           contextInfo?.quotedMessage?.extendedTextMessage?.text;
+    if (textoMsgCitada && textoMensagem) {
+      textoMensagem = `[Em resposta a: "${textoMsgCitada}"] ${textoMensagem}`;
+    }
 
     if (!textoMensagem) {
       console.log('[Debug] Texto vazio após extração, abortando. Estrutura da mensagem:', JSON.stringify(mensagem?.message));
@@ -297,11 +325,14 @@ async function handleMessagesUpdate(body) {
     const updates = body?.data;
     if (!Array.isArray(updates)) return;
 
+    const adminJid = process.env.ADMIN_GROUP_JID;
+
     for (const update of updates) {
       const remoteJid  = update?.key?.remoteJid;
       const messageId  = update?.key?.id;
 
-      if (remoteJid !== DELIVERY_JID) continue;
+      // Joinha agora é detectado no grupo Admin (não mais no grupo de pedidos)
+      if (remoteJid !== adminJid) continue;
 
       const reactions = update?.update?.messageStubParameters ||
                         update?.reactions ||
@@ -338,7 +369,7 @@ async function notificarEntrega(messageId) {
   const pedido = pedidosDespachados.get(messageId);
   if (!pedido) return;
 
-  console.log(`[Entrega] 👍 detectado! Notificando cliente ${pedido.clienteNumero}`);
+  console.log(`[Entrega] 👍 detectado no Admin! Notificando cliente ${pedido.clienteNumero}`);
 
   // Dá baixa no estoque agora que entrega foi confirmada pelo Luiz (joinha)
   try {
