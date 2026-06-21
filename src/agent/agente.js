@@ -1,6 +1,5 @@
 // src/agent/agente.js
 const Anthropic = require('@anthropic-ai/sdk');
-const estoque   = require('../stock/estoque');
 const catalogo  = require('../stock/catalogo');
 const { enviarTexto } = require('../webhook/evolution');
 
