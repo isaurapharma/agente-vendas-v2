@@ -3,7 +3,6 @@
 // do Luiz humano e executa ações de gestão do negócio.
 
 const Anthropic = require('@anthropic-ai/sdk');
-const estoque   = require('../stock/estoque');
 const catalogo      = require('../stock/catalogo');
 const estoqueAdmin  = require('../stock/estoque-admin');
 const { adicionarApelidos, removerApelidos, verApelidos, listarTodosApelidos } = require('../stock/apelidos');
