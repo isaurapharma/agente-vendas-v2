@@ -138,7 +138,7 @@ function calcularFrete(endereco) {
 
 
 // ── System Prompt do Luiz ─────────────────────
-function buildSystemPrompt(foraDoHorario = false, msgHorario = "", primeiraMensagem = false) {
+function buildSystemPrompt(foraDoHorario = false, msgHorario = "", primeiraMensagem = false, ehRevendedor = false) {
   const pixKey  = process.env.PIX_KEY  || 'luaraneves91@hotmail.com';
   const pixName = process.env.PIX_NAME || 'Izaura Macena';
 
@@ -214,6 +214,14 @@ MARCA MELHOR: todas confiáveis +15 anos (exceto Swiss, mais recente). Qualidade
 
 CONTEXTO: busca no histórico antes de responder. Se não achar e for complexo → "só um minutinho!" + aciona Luiz.
 
+${ehRevendedor ? `
+⚠️ CONTEXTO: VOCÊ ESTÁ NUM GRUPO DE REVENDEDOR.
+- Usar SEMPRE a tabela de REVENDA (preços menores) — nunca a tabela de cliente final
+- Se pedirem preço/tabela: enviar_catalogo com tipo "revenda"
+- Fluxo de pedido: revendedor manda produto → confirma → pede etiqueta → despacha pro Admin SEM exigir PIX
+- Se falar retirada: confirma e avisa que Luiz vai combinar o local
+- Pagamento é acertado em outro canal — nunca cobrar PIX
+` : ''}
 PAGAMENTO: só PIX. Nome: ${pixName}. Chave: ${pixKey}. Banco: Santander.
 ⚠️ HORÁRIO ATUAL (você JÁ SABE, NUNCA pergunte ao cliente que horas são ou que dia é):
 ${foraDoHorario ? `AGORA ESTÁ FORA DO HORÁRIO — ${msgHorario}` : `Horário: seg-sex 12h-20h, sábado 12h-16h. Dentro do horário agora.`}
@@ -336,7 +344,7 @@ function removerPrecoDaResposta(produto) {
 }
 
 // ── Executor de ferramentas ───────────────────
-async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNome) {
+async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNome, ehRevendedor = false) {
   console.log(`[Tool] ${nome}`, input);
 
   switch (nome) {
@@ -350,14 +358,16 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
     }
 
     case 'enviar_catalogo': {
-      const cat = catalogo.getCategoria(input.categoria.toLowerCase());
+      const tipoTabela = input.tipo === 'revenda' || ehRevendedor ? 'revenda' : 'normal';
+      const cat = catalogo.getCategoria(input.categoria.toLowerCase(), tipoTabela);
       if (!cat) return { resultado: `Categoria "${input.categoria}" não encontrada.` };
       await enviarTexto(clienteNumero, cat);
-      return { resultado: { ok: true, mensagem: `Catálogo de ${input.categoria} enviado.` } };
+      return { resultado: { ok: true, mensagem: `Catálogo de ${input.categoria} (${tipoTabela}) enviado.` } };
     }
 
     case 'consultar_preco_catalogo': {
-      const cat = catalogo.getCategoria(input.categoria.toLowerCase());
+      const tipoTabela = input.tipo === 'revenda' || ehRevendedor ? 'revenda' : 'normal';
+      const cat = catalogo.getCategoria(input.categoria.toLowerCase(), tipoTabela);
       if (!cat) return { resultado: `Categoria "${input.categoria}" não encontrada no catálogo.` };
       return { resultado: cat };
     }
@@ -527,7 +537,7 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
 }
 
 // ── Loop principal ────────────────────────────
-async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cliente') {
+async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cliente', ehRevendedor = false) {
   const sessao = getSessao(clienteNumero);
 
   // Se Luiz humano interveio manualmente, aguarda 3min desde a ÚLTIMA
@@ -595,7 +605,7 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
       resultado = await client.messages.create({
         model: 'claude-sonnet-4-6',
         max_tokens: 1024,
-        system: buildSystemPrompt(_foraHorario, _msgHorario, sessao.historico.length <= 1),
+        system: buildSystemPrompt(_foraHorario, _msgHorario, sessao.historico.length <= 1, ehRevendedor),
         tools: TOOLS,
         messages: sessao.historico
       });
@@ -663,7 +673,7 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
           // dessa sessão com "tool_use ids found without tool_result").
           let conteudoResultado;
           try {
-            const saida = await executarFerramenta(bloco.name, bloco.input, sessao, clienteNumero, clienteNome);
+            const saida = await executarFerramenta(bloco.name, bloco.input, sessao, clienteNumero, clienteNome, ehRevendedor);
             conteudoResultado = JSON.stringify(saida.resultado);
           } catch (errFerramenta) {
             console.error(`[Tool] Erro ao executar ${bloco.name}:`, errFerramenta);
