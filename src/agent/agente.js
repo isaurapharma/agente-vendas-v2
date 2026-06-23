@@ -102,6 +102,7 @@ function getSessao(numero) {
       historico: [],
       carrinho: [],
       aguardandoPix: false,
+      enderecoJaCadastrado: false,
       pedidoPendente: null,
       luizHumanoAtivo: false,
       luizHumanoUltimaMsg: null,
@@ -159,7 +160,7 @@ DISPONIBILIDADE/PREÇO:
 - Substância+marca específica → só aquele item, 1 linha com valor
 - Só substância → tabela completa via enviar_catalogo
 - "O que vocês têm?" genérico → "me fala o que precisa, temos muitos produtos! 💪"
-- Item "❌ EM FALTA" no catálogo → avisa que está em falta
+- Item "❌ EM FALTA" no catálogo → avisa que está em falta. Em falta em qualquer tabela = em falta pra todos (cliente e revendedor têm a mesma disponibilidade de estoque)
 - Produto não encontrado → "vou verificar! 🫡" + aciona Luiz. NUNCA diz "não temos"
 
 MAPEAMENTO CATEGORIAS:
@@ -170,20 +171,15 @@ PIX SEM CONTEXTO: se chegar comprovante/imagem de PIX sem pedido em andamento �
 PAGAMENTO APÓS ENTREGA (fiado): se cliente do chat falar "vou pagar depois", "pago na entrega", "acerta depois" ou similar → NÃO despacha → aciona Luiz no Admin avisando. Quando Luiz liberar via Admin ("libera o pedido do [cliente]" ou similar) → avisa cliente "Liberado! Já separei seu pedido 🫡" → despacha pro Admin normalmente seguindo todas as regras (etiqueta, resumo, etc)
 
 FECHAMENTO DE PEDIDO:
-1. Identifica produto exato — 1 marca = assume direto; 2+ marcas iguais = pergunta qual
-2. consultar_preco_catalogo pra pegar preço (nunca de cabeça)
-3. Pergunta bairro pra calcular frete
-4. Após bairro: pergunta "O Luiz já tem seu endereço cadastrado? 😊"
-5a. SE SIM → manda resumo + enviar_pix normalmente (sem etiqueta) → pede comprovante → ao receber comprovante: "Fechou! 🫡" + despachar_pedido (avisa Admin que endereço já está cadastrado)
-5b. SE NÃO → manda resumo + enviar_pix (com etiqueta em branco pra preencher) → cliente manda comprovante + etiqueta preenchida → "Fechou! 🫡" + despachar_pedido
-6. Se chegar comprovante sem etiqueta (quando não tinha cadastrado) → pede: "Falta preencher os dados de entrega! 🫡"
+1. Identifica produto(1 marca=direto;2+=pergunta qual)
+2. consultar_preco_catalogo pra pegar preço
+3. Pergunta bairro→calcula frete
+4. Pergunta "Luiz já tem o endereço de entrega?"
+   SE SIM → chama confirmar_endereco_cadastrado → resumo+enviar_pix(sem etiqueta) → pede comprovante → recebeu→"Fechou!🫡"→despachar
+   SE NÃO → resumo+enviar_pix(com etiqueta em branco) → cliente manda comprovante+etiqueta preenchida → "Fechou!🫡"→despachar
+5. Sem etiqueta quando esperava → "Falta preencher os dados de entrega! 🫡"
 
-GRUPOS DE FORNECEDORES/REVENDEDORES:
-- Revendedor manda produto → confirma com preço de revenda → pergunta bairro → pergunta se Luiz tem endereço cadastrado
-- SE SIM → despacha pro Admin direto sem PIX, avisando que endereço já cadastrado
-- SE NÃO → envia etiqueta em branco → revendedor preenche → despacha pro Admin sem PIX
-- Se falar retirada → "Anotado! 🫡 Luiz já entra em contato pra combinar o local" + despacha pro Admin com aviso de retirada
-- Só envia tabela de revenda se pedirem preço explicitamente
+REVENDEDOR: mesmo fluxo mas SEM PIX. Produto→confirma(preço revenda)→bairro→"Luiz já tem o endereço de entrega?" SIM→chama confirmar_endereco_cadastrado→despacha direto. NÃO→etiqueta em branco→preenche→despacha. Retirada→"Anotado!🫡 Luiz combina o local"+despacha. Tabela só se pedirem.
 
 ENTREGA/LOCAL:
 - Qualquer local (portaria, academia, trabalho, loja, primo) → "Blz! Me passa endereço completo com bairro 🛵"
@@ -285,6 +281,11 @@ const TOOLS = [
     }
   },
   {
+    name: 'confirmar_endereco_cadastrado',
+    description: 'Registra que o Luiz já tem o endereço de entrega deste cliente cadastrado. Chamar quando o cliente confirmar "sim" na pergunta "Luiz já tem o endereço de entrega?". Após isso, enviar_pix NÃO vai mandar etiqueta em branco.',
+    input_schema: { type: 'object', properties: {}, required: [] }
+  },
+  {
     name: 'acionar_luiz_humano',
     description: 'Aciona Luiz humano. Usar em: frete desconhecido, produto não encontrado, CEP Correios, desconto, retirada, situação complexa.',
     input_schema: {
@@ -384,6 +385,12 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
       return { resultado: { frete, bairro: input.bairro } };
     }
 
+    case 'confirmar_endereco_cadastrado': {
+      sessao.enderecoJaCadastrado = true;
+      salvarSessoesNoDisco();
+      return { resultado: { ok: true, mensagem: 'Endereço marcado como já cadastrado. enviar_pix não vai incluir etiqueta.' } };
+    }
+
     case 'acionar_luiz_humano': {
       const grupoAdmin = process.env.ADMIN_GROUP_JID;
       // Sempre usa o nome salvo (pushName) e número reais, em vez de
@@ -467,15 +474,21 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
       await new Promise(r => setTimeout(r, 1000));
       await enviarTexto(clienteNumero, pixKey);
       await new Promise(r => setTimeout(r, 1000));
-      await enviarTexto(clienteNumero, `Preenche os dados abaixo e manda o comprovante do PIX pra finalizar! 🫡`);
-      await new Promise(r => setTimeout(r, 500));
-      await enviarTexto(clienteNumero,
-        `Destinatário: \n` +
-        `Rua: , n° , Apto \n` +
-        `Bairro: \n` +
-        `Cidade: \n` +
-        `CEP: `
-      );
+
+      // Só envia etiqueta se endereço NÃO estiver cadastrado E não for revendedor
+      if (!sessao.enderecoJaCadastrado && !ehRevendedor) {
+        await enviarTexto(clienteNumero, `Preenche os dados abaixo e manda o comprovante do PIX pra finalizar! 🫡`);
+        await new Promise(r => setTimeout(r, 500));
+        await enviarTexto(clienteNumero,
+          `Destinatário: \n` +
+          `Rua: , n° , Apto \n` +
+          `Bairro: \n` +
+          `Cidade: \n` +
+          `CEP: `
+        );
+      } else {
+        await enviarTexto(clienteNumero, `Manda o comprovante pra finalizar! 🫡`);
+      }
 
       sessao.aguardandoPix = true;
       return { resultado: { ok: true, totalCobrado: totalFormatado, descontoAplicado, instrucao: 'Mensagens enviadas automaticamente. NÃO escreva mais nada — aguarde o cliente preencher e mandar o comprovante.' } };
@@ -530,6 +543,8 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
       );
 
       limparCarrinho(clienteNumero);
+      sessao.enderecoJaCadastrado = false;
+      salvarSessoesNoDisco();
       return { resultado: { ok: true } };
     }
 
