@@ -165,23 +165,25 @@ DISPONIBILIDADE/PREÇO:
 MAPEAMENTO CATEGORIAS:
 durateston|enantato|masteron|primobolan|deca|trembolona|oxandrolona|peptideos|gh|emagrecedores(retatrutida/ozempic/tirzepatida/mounjaro/lipoless/tg/clembuterol/lipostabil)|dianabol|hemogenim|deposteron|boldenona|stanozolol|diversos(roaccutan/ritalina/anastrozol/tamoxifeno/tadalafila/cabergolina)|mistos(mix6/cutstack)|propionato(testosterona propionato)|npp(nandrolona fenilpropionato)|hcg|turinabol|halotestin|proviron|testosteronagel
 
+PIX SEM CONTEXTO: se chegar comprovante/imagem de PIX sem pedido em andamento → "Tá pagando qual pedido com esse PIX? 🫡" → cliente responde → envia resumo pro Admin: "PIX recebido de [cliente] referente a: [resposta]" + aciona Luiz
+
+PAGAMENTO APÓS ENTREGA (fiado): se cliente do chat falar "vou pagar depois", "pago na entrega", "acerta depois" ou similar → NÃO despacha → aciona Luiz no Admin avisando. Quando Luiz liberar via Admin ("libera o pedido do [cliente]" ou similar) → avisa cliente "Liberado! Já separei seu pedido 🫡" → despacha pro Admin normalmente seguindo todas as regras (etiqueta, resumo, etc)
+
 FECHAMENTO DE PEDIDO:
 1. Identifica produto exato — 1 marca = assume direto; 2+ marcas iguais = pergunta qual
 2. consultar_preco_catalogo pra pegar preço (nunca de cabeça)
-3. Pergunta bairro pra calcular frete. Se bairro cadastrado = calcula direto. Se não = aciona Luiz pra cotar
-4. Manda resumo (produto+frete+total)
-5. enviar_pix (manda PIX + texto em branco da etiqueta pra cliente preencher — o código já envia automaticamente, NÃO repetir no texto da resposta, NÃO escrever nada após chamar essa ferramenta)
-6. Cliente manda comprovante REAL (imagem/PDF/texto banco) + etiqueta preenchida
-7. Se chegou comprovante mas SEM etiqueta preenchida → pede os dados: "Falta preencher os dados de entrega! 🫡"
-8. Recebeu comprovante E etiqueta preenchida → responde "Fechou! 🫡" e chama despachar_pedido direto — NÃO confirma o pedido de novo, já foi confirmado antes
-
-PIX SEM CONTEXTO: se chegar um comprovante/imagem de PIX no chat sem pedido em andamento → pergunta "Esse PIX é referente a quê? 🫡" + aciona Luiz no Admin avisando que chegou PIX sem contexto identificado
+3. Pergunta bairro pra calcular frete
+4. Após bairro: pergunta "O Luiz já tem seu endereço cadastrado? 😊"
+5a. SE SIM → manda resumo + enviar_pix normalmente (sem etiqueta) → pede comprovante → ao receber comprovante: "Fechou! 🫡" + despachar_pedido (avisa Admin que endereço já está cadastrado)
+5b. SE NÃO → manda resumo + enviar_pix (com etiqueta em branco pra preencher) → cliente manda comprovante + etiqueta preenchida → "Fechou! 🫡" + despachar_pedido
+6. Se chegar comprovante sem etiqueta (quando não tinha cadastrado) → pede: "Falta preencher os dados de entrega! 🫡"
 
 GRUPOS DE FORNECEDORES/REVENDEDORES:
-- Mesmo fluxo de atendimento de cliente comum
-- Se pedirem preço e não tiver tabela de revendedor cadastrada → aciona Luiz
-- Se quiserem fechar pedido: segue fluxo normal, mas NÃO exige PIX — assim que revendedor preencher a etiqueta já despacha pro Admin
-- Pedido sem preço se não tiver tabela — envia pro Admin sem valor
+- Revendedor manda produto → confirma com preço de revenda → pergunta bairro → pergunta se Luiz tem endereço cadastrado
+- SE SIM → despacha pro Admin direto sem PIX, avisando que endereço já cadastrado
+- SE NÃO → envia etiqueta em branco → revendedor preenche → despacha pro Admin sem PIX
+- Se falar retirada → "Anotado! 🫡 Luiz já entra em contato pra combinar o local" + despacha pro Admin com aviso de retirada
+- Só envia tabela de revenda se pedirem preço explicitamente
 
 ENTREGA/LOCAL:
 - Qualquer local (portaria, academia, trabalho, loja, primo) → "Blz! Me passa endereço completo com bairro 🛵"
@@ -537,7 +539,7 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
 }
 
 // ── Loop principal ────────────────────────────
-async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cliente', ehRevendedor = false) {
+async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cliente', ehRevendedor = false, conteudoMultimodal = null) {
   const sessao = getSessao(clienteNumero);
 
   // Se Luiz humano interveio manualmente, aguarda 3min desde a ÚLTIMA
@@ -588,7 +590,18 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
   }
 
   if (mensagemTexto !== null) {
-    sessao.historico.push({ role: "user", content: mensagemTexto });
+    // Se tem conteúdo multimodal (imagem ou PDF), monta mensagem com array de content
+    if (conteudoMultimodal) {
+      sessao.historico.push({
+        role: 'user',
+        content: [
+          ...conteudoMultimodal,
+          { type: 'text', text: mensagemTexto || 'Arquivo enviado.' }
+        ]
+      });
+    } else {
+      sessao.historico.push({ role: 'user', content: mensagemTexto });
+    }
   }
 
   if (sessao.historico.length > 30) {
