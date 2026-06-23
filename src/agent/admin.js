@@ -346,14 +346,26 @@ const TOOLS_ADMIN = [
   },
   {
     name: 'enviar_mensagem_cliente',
-    description: 'Envia uma mensagem do Luiz humano diretamente pro chat de um cliente ou grupo, sem o Luiz precisar ir lá. Use quando Luiz falar "responde [nome/número] [mensagem]" ou "fala pra [cliente] que [mensagem]". Luiz pode repassar cotação de frete, desconto, qualquer info. O agente replica a mensagem no chat do destino.',
+    description: 'Envia uma mensagem do Luiz humano diretamente pro chat de um cliente ou grupo. Use quando Luiz falar "responde [nome/número] [mensagem]" ou "fala pra [cliente] que [mensagem]".',
     input_schema: {
       type: 'object',
       properties: {
-        destino: { type: 'string', description: 'Número do cliente (ex: 5521999998888) ou nome do grupo (ex: Ziraldo, Big Jeff)' },
+        destino: { type: 'string', description: 'Número do cliente (ex: 5521999998888) ou nome do grupo (ex: Ziraldo)' },
         mensagem: { type: 'string', description: 'Mensagem exata a enviar' }
       },
       required: ['destino', 'mensagem']
+    }
+  },
+  {
+    name: 'liberar_pedido_fiado',
+    description: 'Libera um pedido pra entrega sem PIX. Use quando Luiz falar "libera o pedido do [cliente]", "pode despachar o [cliente]", "ok pra [número]" ou similar. O agente vai avisar o cliente e despachar o pedido.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        numero: { type: 'string', description: 'Número do cliente a liberar (ex: 5521999998888)' },
+        observacao: { type: 'string', description: 'Observação opcional (ex: paga na entrega, acerta semana que vem)' }
+      },
+      required: ['numero']
     }
   },
   {
@@ -675,6 +687,29 @@ async function executarFerramentaAdmin(nome, input) {
         }
 
         return { resultado: { ok: true, destino: jidDestino, mensagem } };
+      } catch (err) {
+        return { resultado: { ok: false, erro: err.message } };
+      }
+    }
+
+    case 'liberar_pedido_fiado': {
+      const { enviarTexto } = require('../webhook/evolution');
+      const { getSessao, salvarSessoesNoDisco, liberarPausaLuiz } = require('../agent/agente');
+      const numero = String(input.numero).replace(/\D/g, '');
+      const jid = `${numero}@s.whatsapp.net`;
+      const obs = input.observacao ? ` (${input.observacao})` : '';
+
+      try {
+        // Avisa o cliente que foi liberado
+        await enviarTexto(jid, `Liberado! Já separei seu pedido 🫡${obs}`);
+
+        // Registra no histórico pra IA saber que o pedido foi liberado e despachar
+        const sessao = getSessao(numero);
+        sessao.historico.push({ role: 'user', content: `[Luiz liberou o pedido sem PIX${obs}] — despache o pedido pro Admin agora seguindo todas as regras normais (etiqueta, resumo).` });
+        liberarPausaLuiz(numero);
+        salvarSessoesNoDisco();
+
+        return { resultado: { ok: true, numero, mensagem: 'Cliente avisado e pedido liberado pra despacho.' } };
       } catch (err) {
         return { resultado: { ok: false, erro: err.message } };
       }
