@@ -1,6 +1,8 @@
 // src/webhook/handler.js
 // Recebe eventos da Evolution API e roteia para o agente
 
+const fs   = require('fs');
+const path = require('path');
 const { processarMensagem, getSessao, registrarMensagemHumana, getClienteDoAviso, processarRespostaLuizParaCliente } = require('../agent/agente');
 const { enviarTexto, marcarComoLida, marcarComoNaoLida, digitando } = require('./evolution');
 const { isAutorizado, adicionarContato, removerContato } = require('../stock/contatos');
@@ -57,7 +59,33 @@ function ehBloqueado(numero) {
 }
 
 // ── Mapa de pedidos despachados: messageId → clienteNumero ─────
-const pedidosDespachados = new Map();
+// Salvo em disco pra sobreviver a redeployos e limpeza de histórico
+const PEDIDOS_FILE = path.resolve(process.env.PEDIDOS_FILE || './data/pedidos-despachados.json');
+
+function carregarPedidos() {
+  try {
+    if (fs.existsSync(PEDIDOS_FILE)) {
+      const dados = JSON.parse(fs.readFileSync(PEDIDOS_FILE, 'utf-8'));
+      return new Map(Object.entries(dados));
+    }
+  } catch (e) {}
+  return new Map();
+}
+
+function salvarPedidos(mapa) {
+  try {
+    const dir = path.dirname(PEDIDOS_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const obj = {};
+    for (const [k, v] of mapa.entries()) obj[k] = v;
+    fs.writeFileSync(PEDIDOS_FILE, JSON.stringify(obj, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('[Pedidos] Erro ao salvar:', e.message);
+  }
+}
+
+const pedidosDespachados = carregarPedidos();
+console.log(`[Pedidos] ${pedidosDespachados.size} pedido(s) em aberto carregado(s) do disco.`);
 
 // ── IDs de mensagens enviadas pela própria IA ──────────────────
 // Usado para diferenciar mensagens automáticas (IA) de mensagens
@@ -133,6 +161,7 @@ function nomeRevendedor(remoteJid) {
 // ── Registra pedido despachado para rastrear entrega ──────────
 function registrarPedidoDespachado(messageId, clienteNumero, clienteNome, itens) {
   pedidosDespachados.set(messageId, { clienteNumero, clienteNome, itens, timestamp: Date.now() });
+  salvarPedidos(pedidosDespachados);
   console.log(`[Pedido] Registrado: ${messageId} → ${clienteNumero}`);
 }
 
@@ -256,6 +285,24 @@ async function handleWebhook(req, res) {
     let textoMensagem = await extrairTexto(mensagem);
     console.log('[Debug] Texto extraído:', JSON.stringify(textoMensagem));
 
+    // ── Detecta imagem ou PDF mandado pelo cliente ────────────
+    // Permite ler comprovante de PIX em imagem ou PDF
+    let conteudoMultimodalCliente = null;
+    const conteudoImagemCliente = midiaAdmin.montarConteudoImagem(mensagem, textoMensagem);
+    if (conteudoImagemCliente) {
+      conteudoMultimodalCliente = conteudoImagemCliente;
+      if (!textoMensagem) textoMensagem = '[IMAGEM RECEBIDA]';
+      console.log('[Debug] Imagem de cliente detectada.');
+    }
+    if (!conteudoMultimodalCliente) {
+      const conteudoPdfCliente = await midiaAdmin.montarConteudoPdf(mensagem, textoMensagem);
+      if (conteudoPdfCliente) {
+        conteudoMultimodalCliente = conteudoPdfCliente;
+        if (!textoMensagem) textoMensagem = '[PDF RECEBIDO]';
+        console.log('[Debug] PDF de cliente detectado.');
+      }
+    }
+
     // ── Detecta reply (citação) do cliente ────────────────────
     // Se o cliente respondeu citando uma mensagem específica, inclui
     // o texto citado no contexto pra IA entender a referência.
@@ -296,7 +343,7 @@ async function handleWebhook(req, res) {
 
     // ── Processa com o agente IA (cliente final) ──────────────
     console.log('[Debug] Chamando processarMensagem...');
-    const resposta = await processarMensagem(numero, textoMensagem, pushName, false);
+    const resposta = await processarMensagem(numero, textoMensagem, pushName, false, conteudoMultimodalCliente);
     console.log('[Debug] Resposta do agente:', JSON.stringify(resposta));
 
     if (resposta) {
@@ -397,6 +444,7 @@ async function notificarEntrega(messageId) {
   );
 
   pedidosDespachados.delete(messageId);
+  salvarPedidos(pedidosDespachados);
 }
 
 // ── Handler de grupos de revendedores ─────────────────────────
@@ -405,15 +453,31 @@ async function handleGrupoRevendedor(mensagem, remoteJid, data) {
     if (mensagem?.key?.fromMe) return;
 
     const pushName      = mensagem?.pushName || data?.pushName || 'revendedor';
-    const textoMensagem = await extrairTexto(mensagem);
-    if (!textoMensagem) return;
+    let textoMensagemRev = await extrairTexto(mensagem);
+
+    // Detecta imagem ou PDF no grupo revendedor
+    let conteudoMultimodalRev = null;
+    const imgRev = midiaAdmin.montarConteudoImagem(mensagem, textoMensagemRev);
+    if (imgRev) {
+      conteudoMultimodalRev = imgRev;
+      if (!textoMensagemRev) textoMensagemRev = '[IMAGEM RECEBIDA]';
+    }
+    if (!conteudoMultimodalRev) {
+      const pdfRev = await midiaAdmin.montarConteudoPdf(mensagem, textoMensagemRev);
+      if (pdfRev) {
+        conteudoMultimodalRev = pdfRev;
+        if (!textoMensagemRev) textoMensagemRev = '[PDF RECEBIDO]';
+      }
+    }
+
+    if (!textoMensagemRev) return;
 
     const nomeRev = nomeRevendedor(remoteJid);
-    console.log(`[Revendedor] ${nomeRev} (${remoteJid}): ${textoMensagem}`);
+    console.log(`[Revendedor] ${nomeRev} (${remoteJid}): ${textoMensagemRev}`);
 
     await digitando(remoteJid, 2000);
 
-    const resposta = await processarMensagem(remoteJid, textoMensagem, nomeRev, true);
+    const resposta = await processarMensagem(remoteJid, textoMensagemRev, nomeRev, true, conteudoMultimodalRev);
     if (resposta) {
       await enviarTexto(remoteJid, resposta);
     }
