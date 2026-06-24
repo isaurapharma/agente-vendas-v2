@@ -6,12 +6,10 @@ const { enviarTexto } = require('../webhook/evolution');
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ── Alerta crítico (créditos esgotados, falhas graves) ────────
-// Dispara notificação ntfy + mensagem no grupo admin. Tem um cooldown
-// simples pra não espamar o Luiz com a mesma falha repetida a cada msg.
 const _ultimoAlerta = {};
 async function dispararAlertaCritico(chave, titulo, mensagem) {
   const agora = Date.now();
-  const cooldownMs = 10 * 60 * 1000; // 10 minutos entre alertas iguais
+  const cooldownMs = 10 * 60 * 1000;
   if (_ultimoAlerta[chave] && (agora - _ultimoAlerta[chave]) < cooldownMs) return;
   _ultimoAlerta[chave] = agora;
 
@@ -29,7 +27,6 @@ async function dispararAlertaCritico(chave, titulo, mensagem) {
   const grupoAdmin = process.env.ADMIN_GROUP_JID;
   if (grupoAdmin) {
     try {
-      const { enviarTexto } = require('../webhook/evolution');
       await enviarTexto(grupoAdmin, `🚨 *${titulo}*\n\n${mensagem}`);
     } catch (_) {}
   }
@@ -38,8 +35,7 @@ async function dispararAlertaCritico(chave, titulo, mensagem) {
 const fs   = require('fs');
 const path = require('path');
 
-// ── Persistência simples de sessões em arquivo JSON ────────────
-// Evita perder o histórico de conversa de todo mundo a cada redeploy.
+// ── Persistência de sessões ────────────────────────────────────
 function getSessoesFilePath() {
   return path.resolve(process.env.SESSOES_FILE_PATH || './data/sessoes.json');
 }
@@ -66,8 +62,6 @@ let _salvandoSessoes = false;
 let _salvamentoPendente = false;
 
 function salvarSessoesNoDisco() {
-  // Debounce simples: evita salvar em disco a cada mensagem isoladamente
-  // se várias chamadas vierem em sequência rápida.
   if (_salvandoSessoes) {
     _salvamentoPendente = true;
     return;
@@ -79,7 +73,6 @@ function salvarSessoesNoDisco() {
       const arquivo = getSessoesFilePath();
       const dir = path.dirname(arquivo);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
       const obj = Object.fromEntries(sessoes);
       fs.writeFileSync(arquivo, JSON.stringify(obj), 'utf-8');
     } catch (err) {
@@ -121,7 +114,7 @@ function limparCarrinho(numero) {
   s.pedidoPendente = null;
 }
 
-// ── Fretes por bairro ─────────────────────────
+// ── Fretes por bairro ─────────────────────────────────────────
 const FRETES = {
   10: ['ipanema','copacabana','leme','leblon'],
   15: ['botafogo','lagoa','urca'],
@@ -134,11 +127,10 @@ function calcularFrete(endereco) {
   for (const [valor, bairros] of Object.entries(FRETES)) {
     if (bairros.some(b => end.includes(b))) return Number(valor);
   }
-  return null; // frete desconhecido — chamar Luiz humano
+  return null;
 }
 
-
-// ── System Prompt do Luiz ─────────────────────
+// ── System Prompt do Luiz ─────────────────────────────────────
 function buildSystemPrompt(foraDoHorario = false, msgHorario = "", primeiraMensagem = false, ehRevendedor = false) {
   const pixKey  = process.env.PIX_KEY  || 'luaraneves91@hotmail.com';
   const pixName = process.env.PIX_NAME || 'Izaura Macena';
@@ -149,6 +141,8 @@ function buildSystemPrompt(foraDoHorario = false, msgHorario = "", primeiraMensa
 
 PERSONALIDADE: carioca, amigo, sem formalidade. Usa: opa, bora, fechou, mingau (=dinheiro). Frases curtas. Nunca: "como posso ajudar", "prezado", forçar venda, perguntar "qual produto quer?", "mano". Emojis masculinos (💪👊🔥🚀🫡), risada (😂) só em piada. "Brother" máx 1x, só com cliente conhecido. Não expõe mecânica interna. Não fala nome da loja. Piadas ok, imita Silvio Santos às vezes.
 
+⚠️ ESTILO DE RESPOSTA: Responde APENAS o que foi perguntado. NÃO faz perguntas ao final de cada resposta tentando forçar venda ou avançar o fluxo. Aguarda o cliente tomar a iniciativa. Só faz perguntas quando for estritamente necessário para completar um pedido em andamento.
+
 PRIMEIRA MENSAGEM DA CONVERSA: quando o histórico está vazio (primeira vez que o cliente manda mensagem), SEMPRE responde com: "Fala comigo, tudo na paz! Aqui o assistente do Luiz, tá precisando do quê? 👊" — independente do que o cliente escreveu. Depois segue normalmente respondendo o que ele pediu na mesma mensagem se tiver algo específico.
 ${primeiraMensagem ? '⚠️ ESTA É A PRIMEIRA MENSAGEM DO CLIENTE — use a saudação de boas-vindas acima obrigatoriamente.' : ''}
 
@@ -157,11 +151,14 @@ IDENTIDADE: se questionado → "sou o assistente do Luiz". Nunca afirma ser IA.
 CONHECIMENTO: expert em hormônios/peptídeos/suplementos (testo, masteron, trembo, deca, oxandrolona, GH, GHK-Cu, BPC-157, tirzepatida, retatrutida, ozempic...). Sabe ciclos, protocolos, efeitos colaterais masculino/feminino. Responde como farmácia: uso, diluição, colaterais, conservação, dose inicial concreta (não vago). Peptídeo em pó = sem gelo. NUNCA afirma que produto não existe/não tem formato sem consultar catálogo primeiro.
 
 DISPONIBILIDADE/PREÇO:
-- Substância+marca específica → só aquele item, 1 linha com valor
-- Só substância → tabela completa via enviar_catalogo
+- Substância+marca específica → só aquele item, 1 linha com valor. NÃO envia tabela completa.
+- Só substância (sem marca) → tabela completa via enviar_catalogo
 - "O que vocês têm?" genérico → "me fala o que precisa, temos muitos produtos! 💪"
 - Item "❌ EM FALTA" no catálogo → avisa que está em falta. Em falta em qualquer tabela = em falta pra todos (cliente e revendedor têm a mesma disponibilidade de estoque)
 - Produto não encontrado → "vou verificar! 🫡" + aciona Luiz. NUNCA diz "não temos"
+
+APELIDOS CONHECIDOS (clientes usam esses termos):
+- "retra" = Retatrutida
 
 MAPEAMENTO CATEGORIAS:
 durateston|enantato|masteron|primobolan|deca|trembolona|oxandrolona|peptideos|gh|emagrecedores(retatrutida/ozempic/tirzepatida/mounjaro/lipoless/tg/clembuterol/lipostabil)|dianabol|hemogenim|deposteron|boldenona|stanozolol|diversos(roaccutan/ritalina/anastrozol/tamoxifeno/tadalafila/cabergolina)|mistos(mix6/cutstack)|propionato(testosterona propionato)|npp(nandrolona fenilpropionato)|hcg|turinabol|halotestin|proviron|testosteronagel
@@ -190,7 +187,7 @@ ENTREGA/LOCAL:
 FRETE:
 - Bairro fixo: calcular_frete automático
 - Bairro desconhecido: "só um minuto que já coto!" + aciona Luiz (nunca diz "fora da área")
-- Correios: pede CEP+endereço completo → aciona Luiz. Postagem até 15h = hoje, depois = amanhã antes das 17h
+- Correios: pede CEP+endereço completo → aciona Luiz. Quando Luiz responder com o valor do frete via reply, o endereço já está coletado — ir direto pro PIX sem perguntar endereço de novo nem perguntar "Luiz já tem o endereço?". Postagem até 15h = hoje, depois = amanhã antes das 17h
 
 HORÁRIOS:
 - Seg-sex: 12h-20h. PIX até 18h = entrega hoje (bairros fixos). PIX até 14h30 = entrega hoje (Correios/cotação)
@@ -232,8 +229,7 @@ ${(() => {
 })()}`;
 }
 
-
-// ── Ferramentas ───────────────────────────────
+// ── Ferramentas ───────────────────────────────────────────────
 const TOOLS = [
   {
     name: 'listar_categorias_disponiveis',
@@ -262,7 +258,7 @@ const TOOLS = [
       properties: {
         categoria: {
           type: 'string',
-          description: 'Categoria do produto: durateston, enantato, masteron, primobolan, deca, trembolona, oxandrolona, peptideos, gh, emagrecedores, dianabol, hemogenim, deposteron, boldenona, stanozolol, diversos, mistos'
+          description: 'Categoria do produto'
         }
       },
       required: ['categoria']
@@ -337,25 +333,18 @@ const TOOLS = [
   }
 ];
 
-// Remove campos de preço/custo da planilha antes de devolver pro agente
-// de vendas. O preço de venda real é SEMPRE o do catálogo (enviar_catalogo),
-// nunca o custo/preço interno da planilha de estoque.
 function removerPrecoDaResposta(produto) {
   if (!produto) return produto;
   const { preco, custo, ...resto } = produto;
   return resto;
 }
 
-// ── Executor de ferramentas ───────────────────
+// ── Executor de ferramentas ───────────────────────────────────
 async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNome, ehRevendedor = false) {
   console.log(`[Tool] ${nome}`, input);
 
   switch (nome) {
 
-    // IMPORTANTE: remove preço/custo da planilha antes de devolver pra IA
-    // do agente de vendas. A planilha serve só pra controle de estoque
-    // (quantidade) — o preço de venda é SEMPRE o do catálogo
-    // (enviar_catalogo), nunca o custo/preço interno da planilha.
     case 'listar_categorias_disponiveis': {
       return { resultado: catalogo.listarCategorias() };
     }
@@ -393,10 +382,6 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
 
     case 'acionar_luiz_humano': {
       const grupoAdmin = process.env.ADMIN_GROUP_JID;
-      // Sempre usa o nome salvo (pushName) e número reais, em vez de
-      // depender do que a IA decidiu escrever em input.cliente — assim
-      // o Luiz humano nunca recebe "cliente desconhecido" pra alguém
-      // que já está salvo nos contatos dele.
       const identificacaoCliente = clienteNome && clienteNome !== 'cliente'
         ? `${clienteNome} (${clienteNumero})`
         : clienteNumero;
@@ -407,17 +392,13 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
           `Cliente: ${identificacaoCliente}\n` +
           `Motivo: ${input.motivo}`
         );
-        // Guarda o ID dessa mensagem associado ao cliente, pra quando o
-        // Luiz humano der reply nela, o sistema saber automaticamente
-        // qual cliente repassar a resposta dele.
         if (envioAviso?.messageId) {
           registrarMensagemDeAviso(envioAviso.messageId, clienteNumero, clienteNome);
         }
       }
 
-      // Notificação push via ntfy — alarme imediato pro celular do Luiz humano
       const ntfyTopic = process.env.NTFY_TOPIC;
-      console.log('[ntfy] Tentando enviar notificação. Tópico configurado?', !!ntfyTopic, '| Valor:', ntfyTopic);
+      console.log('[ntfy] Tentando enviar notificação. Tópico configurado?', !!ntfyTopic);
       if (ntfyTopic) {
         try {
           const respNtfy = await fetch(`https://ntfy.sh/${ntfyTopic}`, {
@@ -431,10 +412,8 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
           });
           console.log('[ntfy] Resposta do ntfy.sh, status:', respNtfy.status);
         } catch (errNtfy) {
-          console.error('[ntfy] ERRO ao enviar notificação:', errNtfy.message, errNtfy.stack);
+          console.error('[ntfy] ERRO ao enviar notificação:', errNtfy.message);
         }
-      } else {
-        console.error('[ntfy] NTFY_TOPIC não configurado, notificação não enviada.');
       }
 
       sessao.luizHumanoAtivo = true;
@@ -448,15 +427,29 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
 
       let total = Number(input.total);
       let descontoAplicado = 0;
+      let tipoDesconto = null;
 
       try {
         const adminMod = require('./admin');
         const especial = adminMod.getClienteEspecial(clienteNumero);
-        if (especial?.desconto) {
-          descontoAplicado = especial.desconto;
-          total = total * (1 - descontoAplicado / 100);
-          // Se for desconto pontual, zera após aplicar
-          if (especial.descontoPontual) {
+        if (especial) {
+          if (especial.precoFixo != null) {
+            // Preço fixo: substitui o total inteiro
+            tipoDesconto = `preço fixo R$${especial.precoFixo.toFixed(2)}`;
+            descontoAplicado = total - especial.precoFixo;
+            total = especial.precoFixo;
+          } else if (especial.descontoReais != null) {
+            // Desconto em reais: subtrai do total
+            tipoDesconto = `R$${especial.descontoReais.toFixed(2)} de desconto`;
+            descontoAplicado = especial.descontoReais;
+            total = Math.max(0, total - especial.descontoReais);
+          } else if (especial.desconto != null) {
+            // Desconto em porcentagem
+            tipoDesconto = `${especial.desconto}% de desconto`;
+            descontoAplicado = total * (especial.desconto / 100);
+            total = total * (1 - especial.desconto / 100);
+          }
+          if (especial.descontoPontual && tipoDesconto) {
             adminMod.zerarDescontoPontual(clienteNumero);
           }
         }
@@ -475,7 +468,6 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
       await enviarTexto(clienteNumero, pixKey);
       await new Promise(r => setTimeout(r, 1000));
 
-      // Só envia etiqueta se endereço NÃO estiver cadastrado E não for revendedor
       if (!sessao.enderecoJaCadastrado && !ehRevendedor) {
         await enviarTexto(clienteNumero, `Preenche os dados abaixo e manda o comprovante do PIX pra finalizar! 🫡`);
         await new Promise(r => setTimeout(r, 500));
@@ -502,7 +494,6 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
         .map(i => `📦 ${i.nome}${i.quantidade > 1 ? ` (${i.quantidade}x)` : ''}`)
         .join('\n');
 
-      // Etiqueta exatamente no formato para impressão — sem nenhum texto extra
       const apto = input.apto ? `, Apto ${input.apto}` : '';
       const etiqueta =
         `Destinatário: ${input.clienteNome || input.clienteNumero}\n` +
@@ -511,15 +502,14 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
         `Cidade: ${input.cidade}\n` +
         `CEP: ${input.cep}`;
 
-      // Resumo do pedido com aviso pro Luiz verificar PIX
       const resumoPedido =
         `✅ *PEDIDO CONFIRMADO*\n\n` +
         `👤 *Cliente:* ${input.clienteNome || input.clienteNumero}\n` +
         `📱 *Número:* ${clienteNumero}\n\n` +
-        `${itensTexto}\n\n` +
-        `⚠️ *Luiz, confirma se o PIX está correto no app do banco antes de despachar!*`;
+        `${itensTexto}` +
+        // FIX: aviso de PIX só para cliente final, não para revendedor
+        (ehRevendedor ? '' : `\n\n⚠️ *Luiz, confirma se o PIX está correto no app do banco antes de despachar!*`);
 
-      // Envia etiqueta e resumo pro Admin em mensagens separadas
       try {
         await enviarTexto(grupoAdmin, etiqueta);
         await enviarTexto(grupoAdmin, resumoPedido);
@@ -527,18 +517,22 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
         console.error('[Despacho] Erro ao enviar pro Admin:', err.message);
       }
 
-      // Registra pedido pra rastrear o joinha
       try {
         require('./admin').registrarPedidoNoRelatorio({
           clienteNumero,
           clienteNome: input.clienteNome || input.clienteNumero,
           itens: input.itens,
-          enderecoEntrega: input.enderecoEntrega
+          enderecoEntrega: `${input.rua}, ${input.bairro}, ${input.cidade} - CEP: ${input.cep}`
         });
       } catch (_) {}
 
-      // Confirma pro cliente que pedido foi recebido
-      await enviarTexto(`${clienteNumero}@s.whatsapp.net`,
+      // FIX: clienteNumero pode ser JID de grupo (revendedor) — não adiciona
+      // @s.whatsapp.net se já termina com @g.us ou já tem @ no número
+      const clienteJid = clienteNumero.includes('@')
+        ? clienteNumero
+        : `${clienteNumero}@s.whatsapp.net`;
+
+      await enviarTexto(clienteJid,
         `✅ Pedido recebido! Assim que confirmarmos o pagamento a gente já separa pra você 🫡`
       );
 
@@ -553,34 +547,27 @@ async function executarFerramenta(nome, input, sessao, clienteNumero, clienteNom
   }
 }
 
-// ── Loop principal ────────────────────────────
+// ── Loop principal ────────────────────────────────────────────
 async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cliente', ehRevendedor = false, conteudoMultimodal = null) {
   const sessao = getSessao(clienteNumero);
 
-  // Se Luiz humano interveio manualmente, aguarda 3min desde a ÚLTIMA
-  // mensagem que ELE mandou (não desde a mensagem do cliente) antes de
-  // a IA retomar a conversa automaticamente.
-  // EXCEÇÃO: se mensagemTexto for null, é uma chamada especial (ex:
-  // repassar resposta do Luiz humano pro cliente via reply no Admin) —
-  // nesse caso a pausa de 3min não deve bloquear, já que é o próprio
-  // Luiz humano gerando essa resposta.
   if (sessao.luizHumanoAtivo && mensagemTexto !== null) {
     const agora = Date.now();
     const tresMin = 3 * 60 * 1000;
     const tempoDesdeUltimaMsgLuiz = agora - (sessao.luizHumanoUltimaMsg || agora);
     if (tempoDesdeUltimaMsgLuiz < tresMin) {
-      return null; // Luiz humano ainda dentro da janela de atendimento manual, IA não responde
+      return null;
     }
-    // Passou 3min sem o Luiz mandar nada novo, retoma automaticamente
     sessao.luizHumanoAtivo = false;
     sessao.luizHumanoUltimaMsg = null;
   }
 
-  // Verifica horário de entrega (horário de Brasília)
+  // ── Verifica horário (Brasília) ───────────────────────────
   const _agora = new Date();
   const _horaBSB = new Date(_agora.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
   const _hora = _horaBSB.getHours();
-  const _diaSemana = _horaBSB.getDay(); // 0=domingo, 6=sábado
+  const _minutos = _horaBSB.getMinutes();
+  const _diaSemana = _horaBSB.getDay();
 
   let _foraHorario = false;
   let _msgHorario = "";
@@ -592,8 +579,9 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
     if (_hora < 12 || _hora >= 16) {
       _foraHorario = true;
       _msgHorario = "SÁBADO FORA DO HORÁRIO: Entregas aos sábados são das 12h às 16h. Pedido recebido, entrega na segunda a partir das 12h.";
-    } else if (_hora >= 14 || (_hora === 14 && _horaBSB.getMinutes() >= 30)) {
-      // Sábado dentro do horário mas passou das 14h30 — ainda atende mas entrega só na segunda
+    // FIX: era "_hora >= 14 || (_hora === 14 && ...)" — o || fazia entrar no bloco às 14h00
+    // Correto: _hora > 14 para horas depois das 14h, ou _hora === 14 E minutos >= 30
+    } else if (_hora > 14 || (_hora === 14 && _minutos >= 30)) {
       _foraHorario = false;
       _msgHorario = "SÁBADO APÓS 14H30: Pagamento confirmado após 14h30 no sábado — entrega somente na segunda-feira a partir das 12h.";
     }
@@ -605,7 +593,6 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
   }
 
   if (mensagemTexto !== null) {
-    // Se tem conteúdo multimodal (imagem ou PDF), monta mensagem com array de content
     if (conteudoMultimodal) {
       sessao.historico.push({
         role: 'user',
@@ -619,8 +606,18 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
     }
   }
 
+  // FIX: corte do histórico preserva pares tool_use/tool_result íntegros.
+  // Percorre de trás pra frente e só corta em um ponto seguro (mensagem
+  // de usuário com content string, não tool_result).
   if (sessao.historico.length > 30) {
-    sessao.historico = sessao.historico.slice(-30);
+    let corte = sessao.historico.length - 30;
+    // Avança o ponto de corte até achar uma mensagem de usuário com texto simples
+    while (corte < sessao.historico.length) {
+      const msg = sessao.historico[corte];
+      if (msg.role === 'user' && typeof msg.content === 'string') break;
+      corte++;
+    }
+    sessao.historico = sessao.historico.slice(corte);
   }
 
   let resposta = null;
@@ -638,11 +635,6 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
         messages: sessao.historico
       });
     } catch (errApi) {
-      // IMPORTANTE: checa crédito esgotado ANTES de histórico corrompido,
-      // porque os dois retornam o MESMO status HTTP (400). Resetar
-      // histórico não resolve falta de crédito, e fazer isso mascarava
-      // o problema real (visto em produção: ficava "resetando" repetido
-      // quando na verdade já tinha estourado o saldo).
       const errType = errApi?.error?.error?.type || errApi?.error?.type || '';
       const errMsg  = (errApi?.error?.error?.message || errApi?.message || '').toLowerCase();
       const ehSemCredito =
@@ -659,22 +651,13 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
         throw errApi;
       }
 
-      // PROTEÇÃO CONTRA HISTÓRICO CORROMPIDO:
-      // Se a API recusar a requisição por erro de estrutura (ex: tool_use
-      // sem tool_result de uma sessão antiga/corrompida), reseta o
-      // histórico desse cliente e tenta novamente do zero, ao invés de
-      // travar a conversa pra sempre.
       const ehErroEstrutura = errApi?.status === 400 &&
         (errApi?.error?.error?.type === 'invalid_request_error' || errApi?.error?.type === 'invalid_request_error');
 
       if (ehErroEstrutura && tentativasDeResetCliente < MAX_TENTATIVAS_RESET_CLIENTE) {
         tentativasDeResetCliente++;
-        console.error(`[Agente] Histórico corrompido para ${clienteNumero}, resetando sessão (tentativa ${tentativasDeResetCliente}/${MAX_TENTATIVAS_RESET_CLIENTE}). Erro:`, errApi?.message || errApi);
-        sessao.historico = [{ role: 'user', content: mensagemTexto }];
-        // CRÍTICO: salva o reset em disco IMEDIATAMENTE, mesmo que essa
-        // tentativa ainda venha a falhar de novo — evita que o histórico
-        // corrompido fique travado pra sempre e gere loop de erro
-        // consumindo crédito sem nunca responder o cliente.
+        console.error(`[Agente] Histórico corrompido para ${clienteNumero}, resetando sessão (tentativa ${tentativasDeResetCliente}/${MAX_TENTATIVAS_RESET_CLIENTE}).`);
+        sessao.historico = mensagemTexto ? [{ role: 'user', content: mensagemTexto }] : [];
         salvarSessoesNoDisco();
         continue;
       }
@@ -695,18 +678,12 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
       const toolResults = [];
       for (const bloco of resultado.content) {
         if (bloco.type === 'tool_use') {
-          // CRÍTICO: nunca deixar um tool_use sem tool_result correspondente,
-          // mesmo se a ferramenta lançar erro — senão corrompe o histórico
-          // pra sempre (a API passa a rejeitar TODAS as mensagens futuras
-          // dessa sessão com "tool_use ids found without tool_result").
           let conteudoResultado;
           try {
             const saida = await executarFerramenta(bloco.name, bloco.input, sessao, clienteNumero, clienteNome, ehRevendedor);
             conteudoResultado = JSON.stringify(saida.resultado);
           } catch (errFerramenta) {
             console.error(`[Tool] Erro ao executar ${bloco.name}:`, errFerramenta);
-            // Passa o erro REAL pra IA, em vez de mensagem genérica que
-            // ela acaba parafraseando de forma estranha pro cliente.
             conteudoResultado = JSON.stringify({
               erro: true,
               mensagem: `Erro real ao executar ${bloco.name}: ${errFerramenta.message || errFerramenta}. Se for sobre catálogo/preço, ainda assim tenta usar enviar_catalogo, que não depende dessa ferramenta que falhou.`
@@ -725,13 +702,18 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
       continue;
     }
 
-    resposta = resultado.content
+    // FIX: histórico final sempre salva como array de blocos de texto,
+    // igual ao formato que a API retorna — evita mistura de string/array
+    // que corrompia o histórico e causava invalid_request_error
+    const textoResposta = resultado.content
       .filter(b => b.type === 'text')
       .map(b => b.text)
       .join('\n')
       .trim();
 
-    sessao.historico.push({ role: 'assistant', content: resposta });
+    resposta = textoResposta;
+    // Salva no histórico no mesmo formato que a API retorna (array de blocos)
+    sessao.historico.push({ role: 'assistant', content: resultado.content });
     break;
   }
 
@@ -739,24 +721,18 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
   return resposta || null;
 }
 
-// Chamado pelo handler.js quando detecta uma mensagem fromMe que NÃO foi
-// enviada pela própria IA (ou seja, o Luiz humano digitou manualmente do
-// WhatsApp dele direto pro cliente). Ativa/renova a pausa de 3 minutos.
 function registrarMensagemHumana(clienteNumero, textoLuiz = null) {
   const sessao = getSessao(clienteNumero);
   sessao.luizHumanoAtivo = true;
   sessao.luizHumanoUltimaMsg = Date.now();
   if (textoLuiz) {
-    sessao.historico.push({ role: 'assistant', content: `[Luiz humano respondeu manualmente]: ${textoLuiz}` });
+    sessao.historico.push({ role: 'assistant', content: [{ type: 'text', text: `[Luiz humano respondeu manualmente]: ${textoLuiz}` }] });
   }
   console.log(`[Agente] Luiz humano respondeu manualmente para ${clienteNumero}, pausando IA por 3min.`);
   salvarSessoesNoDisco();
 }
 
-// ── Mapeamento de mensagens de aviso (acionar_luiz_humano) -> cliente ──
-// Permite que quando o Luiz humano der REPLY numa mensagem de aviso no
-// grupo Admin, o sistema saiba automaticamente pra qual cliente repassar
-// a resposta dele, sem precisar ele digitar o número de novo.
+// ── Mapeamento de mensagens de aviso → cliente ────────────────
 function getAvisosFilePath() {
   return path.resolve(process.env.AVISOS_FILE_PATH || './data/avisos-luiz.json');
 }
@@ -786,7 +762,6 @@ let _avisos = carregarAvisos();
 
 function registrarMensagemDeAviso(messageId, clienteNumero, clienteNome) {
   _avisos[messageId] = { clienteNumero, clienteNome, criadoEm: Date.now() };
-  // Limpeza simples: remove avisos com mais de 24h pra não acumular pra sempre
   const umDia = 24 * 60 * 60 * 1000;
   for (const id of Object.keys(_avisos)) {
     if (Date.now() - _avisos[id].criadoEm > umDia) delete _avisos[id];
@@ -794,15 +769,10 @@ function registrarMensagemDeAviso(messageId, clienteNumero, clienteNome) {
   salvarAvisos();
 }
 
-// Dado o ID de uma mensagem (stanzaId do reply), retorna qual cliente
-// está associado a ela, ou null se não encontrar.
 function getClienteDoAviso(messageId) {
   return _avisos[messageId] || null;
 }
 
-// Processa a resposta do Luiz humano (via reply) repassando a informação
-// pro cliente certo automaticamente, usando o agente vendedor pra
-// formular a mensagem de forma natural baseada no que o Luiz disse.
 async function processarRespostaLuizParaCliente(clienteNumero, clienteNome, textoLuiz) {
   const sessao = getSessao(clienteNumero);
   sessao.historico.push({
@@ -811,8 +781,6 @@ async function processarRespostaLuizParaCliente(clienteNumero, clienteNome, text
   });
   salvarSessoesNoDisco();
 
-  // Reusa o loop principal pra gerar a resposta natural baseada no que
-  // o Luiz disse, e envia de fato pro cliente.
   const resposta = await processarMensagem(clienteNumero, null, clienteNome || 'cliente');
   if (resposta) {
     await enviarTexto(clienteNumero, resposta);
@@ -829,8 +797,6 @@ module.exports = {
   getClienteDoAviso,
   processarRespostaLuizParaCliente,
   liberarPausaLuiz(clienteNumero) {
-    // Reseta o timer de pausa pra IA retomar a conversa imediatamente
-    // Usar quando o Admin replica uma mensagem pro cliente via enviar_mensagem_cliente
     const sessao = getSessao(clienteNumero);
     sessao.luizHumanoAtivo = false;
     sessao.luizHumanoUltimaMsg = null;
