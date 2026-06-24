@@ -173,18 +173,19 @@ FECHAMENTO DE PEDIDO — ORDEM OBRIGATÓRIA:
 2. consultar_preco_catalogo pra pegar preço exato
 3. Pergunta bairro → calcular_frete
 4. Pergunta "Luiz já tem o endereço de entrega?"
-   SE SIM → chama confirmar_endereco_cadastrado → envia resumo do pedido em texto → chama enviar_pix → aguarda comprovante → recebeu → "Fechou!🫡" → despachar
-   SE NÃO → envia resumo do pedido em texto → chama enviar_pix (que já envia PIX + etiqueta automaticamente) → aguarda comprovante+etiqueta → "Fechou!🫡" → despachar
+   SE SIM → chama confirmar_endereco_cadastrado → envia resumo (só itens+frete+total) → chama enviar_pix → aguarda comprovante → "Fechou!🫡" → despachar
+   SE NÃO → envia resumo (só itens+frete+total) → chama enviar_pix → aguarda comprovante+etiqueta → "Fechou!🫡" → despachar
 
-⚠️ REGRAS CRÍTICAS DO FECHAMENTO:
-- O resumo do pedido deve conter APENAS: nome do produto, quantidade, frete e total. NADA MAIS.
-- NUNCA inclua endereço, destinatário, rua, bairro, CEP ou qualquer dado de entrega no resumo — isso sai automaticamente na etiqueta depois do PIX
-- enviar_pix cuida SOZINHO e NA ORDEM CERTA de enviar: (1) dados do PIX, (2) chave separada, (3) etiqueta em branco
-- A etiqueta em branco é enviada SEMPRE DEPOIS da chave PIX — nunca antes
-- NUNCA envie ou escreva destinatário, etiqueta ou endereço ANTES do PIX — o sistema envia automaticamente na ordem certa APÓS o PIX
-- NUNCA escreva a chave PIX no texto — enviada automaticamente
-- NUNCA escreva etiqueta, destinatário ou endereço manualmente — enviado automaticamente após o PIX
-- Após chamar enviar_pix, NÃO escreva mais nada — só aguarde o comprovante do cliente
+⚠️ REGRAS CRÍTICAS — ORDEM DAS MENSAGENS:
+- O resumo contém APENAS: produto, frete e total. NADA MAIS.
+- Após o resumo, chama enviar_pix IMEDIATAMENTE. O sistema envia automaticamente nesta ordem: (1) dados do PIX, (2) chave PIX, (3) etiqueta em branco pra preencher.
+- NUNCA escreva destinatário, endereço, rua, bairro ou CEP no texto — isso sai AUTOMATICAMENTE DEPOIS da chave PIX pelo sistema.
+- NUNCA peça pro cliente preencher o endereço ANTES de passar o PIX.
+- Se cliente pedir o PIX a qualquer momento ("me passa o PIX", "me manda o PIX", "qual o PIX"): passe o PIX na hora, sem exigir endereço primeiro. O endereço vem junto com o comprovante depois.
+- Após chamar enviar_pix NÃO escreva mais nada — aguarde comprovante.
+
+NEGOCIAÇÃO DE PREÇO / DESCONTO:
+- Se cliente mencionar que pagava menos antes, que Luiz fazia por outro valor, que quer desconto ou que tem costume de pagar menos (ex: "antes eu pagava X", "Luiz fazia por Y", "tem como fazer por Z?", "sempre paguei menos"): NÃO ofereça produto mais barato. Acione Luiz humano para decidir. Ex: "só um minutinho! 🫡" + acionar_luiz_humano com o valor que o cliente mencionou.
 
 REVENDEDOR: mesmo fluxo mas SEM PIX. Produto→confirma(preço revenda)→bairro→"Luiz já tem o endereço de entrega?" SIM→chama confirmar_endereco_cadastrado→despacha direto. NÃO→etiqueta em branco→preenche→despacha. Retirada→"Anotado!🫡 Luiz combina o local"+despacha. Tabela só se pedirem.
 
@@ -288,7 +289,7 @@ const TOOLS = [
   },
   {
     name: 'confirmar_endereco_cadastrado',
-    description: 'Registra que o Luiz já tem o endereço de entrega deste cliente cadastrado. Chamar quando o cliente confirmar "sim" na pergunta "Luiz já tem o endereço de entrega?". Após isso, enviar_pix NÃO vai mandar etiqueta em branco.',
+    description: 'Chamar quando cliente confirmar "sim" na pergunta "Luiz já tem o endereço de entrega?". Após isso, enviar_pix NÃO vai mandar etiqueta em branco — só pede o comprovante.',
     input_schema: { type: 'object', properties: {}, required: [] }
   },
   {
@@ -305,7 +306,9 @@ const TOOLS = [
   },
   {
     name: 'enviar_pix',
-    description: 'Envia dados do PIX ao cliente em duas mensagens: instruções e chave separada para copiar fácil.',
+    description: `Envia PIX ao cliente. O sistema cuida SOZINHO e NA ORDEM CERTA de enviar: (1) dados do PIX com valor, (2) chave PIX separada, (3) etiqueta em branco para preencher (se endereço não cadastrado).
+QUANDO CHAMAR: logo após enviar o resumo do pedido (itens+frete+total) em texto. Nunca escreva etiqueta, endereço ou destinatário antes — o sistema já faz isso automaticamente DEPOIS da chave PIX.
+Se cliente pedir PIX a qualquer momento: chame esta ferramenta imediatamente.`,
     input_schema: {
       type: 'object',
       properties: {
@@ -606,16 +609,33 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
     if (_hora < 12 || _hora >= 16) {
       _foraHorario = true;
       _msgHorario = "SÁBADO FORA DO HORÁRIO: Entregas aos sábados são das 12h às 16h. Pedido recebido, entrega na segunda a partir das 12h.";
-    // FIX: era "_hora >= 14 || (_hora === 14 && ...)" — o || fazia entrar no bloco às 14h00
-    // Correto: _hora > 14 para horas depois das 14h, ou _hora === 14 E minutos >= 30
     } else if (_hora > 14 || (_hora === 14 && _minutos >= 30)) {
       _foraHorario = false;
-      _msgHorario = "SÁBADO APÓS 14H30: Pagamento confirmado após 14h30 no sábado — entrega somente na segunda-feira a partir das 12h.";
+      _msgHorario = "SÁBADO APÓS 14H30: PIX após 14h30 no sábado — entrega somente na segunda-feira a partir das 12h. Não há mais entrega hoje.";
+    } else {
+      _foraHorario = false;
+      _msgHorario = "SÁBADO DENTRO DO HORÁRIO (antes das 14h30): PIX até 14h30 garante entrega hoje para qualquer localização.";
     }
   } else {
-    if (_hora < 12 || _hora >= 20) {
+    // Seg-sex
+    if (_hora < 12) {
       _foraHorario = true;
-      _msgHorario = "FORA DO HORÁRIO: Loja funciona seg-sex das 12h às 20h. O motoboy já saiu hoje — pedido recebido, entrega amanhã a partir das 12h.";
+      _msgHorario = "ANTES DE ABRIR: Loja abre às 12h. Pedido recebido, entrega hoje a partir das 12h se fechar antes das 18h.";
+    } else if (_hora >= 20) {
+      _foraHorario = true;
+      _msgHorario = "APÓS FECHAR (depois das 20h): Motoboy já saiu. Pedido recebido, entrega amanhã a partir das 12h.";
+    } else if (_hora >= 18) {
+      // Entre 18h e 20h — dentro do horário mas motoboy já saiu
+      _foraHorario = false;
+      _msgHorario = `ENTRE 18H E 20H: Loja aberta mas motoboy já saiu. PIX agora = entrega amanhã a partir das 12h. Para bairros fixos: corte das 18h já passou. Para Correios/cotação: corte das 14h30 já passou.`;
+    } else if (_hora > 14 || (_hora === 14 && _minutos >= 30)) {
+      // Entre 14h30 e 18h
+      _foraHorario = false;
+      _msgHorario = `ENTRE 14H30 E 18H: PIX até 18h = entrega hoje (bairros fixos). Para Correios ou bairros que precisam de cotação: corte das 14h30 já passou — entrega amanhã.`;
+    } else {
+      // Entre 12h e 14h30
+      _foraHorario = false;
+      _msgHorario = `ENTRE 12H E 14H30: PIX até 18h = entrega hoje (bairros fixos). PIX até 14h30 = entrega hoje (Correios/cotação). Ainda dentro do prazo para todos.`;
     }
   }
 
