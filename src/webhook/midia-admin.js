@@ -7,8 +7,7 @@ const XLSX = require('xlsx');
 
 /**
  * Constrói o bloco de conteúdo multimodal pra mandar pra API da Anthropic,
- * a partir de uma mensagem de imagem do WhatsApp. A Anthropic lê imagem
- * nativamente (base64), então não precisa de OCR nem nada extra.
+ * a partir de uma mensagem de imagem do WhatsApp.
  *
  * @param {object} mensagem - objeto de mensagem completo do webhook
  * @param {string} textoComplementar - texto que o Luiz mandou junto (legenda ou pergunta)
@@ -18,7 +17,9 @@ function montarConteudoImagem(mensagem, textoComplementar) {
   const imageMsg = mensagem?.message?.imageMessage;
   if (!imageMsg) return null;
 
-  const base64Imagem = mensagem?.message?.base64 || imageMsg?.base64 || mensagem?.base64;
+  // FIX: busca base64 primeiro no campo específico da imagem, depois nos genéricos —
+  // evita pegar base64 de outra mídia que possa estar em mensagem.base64
+  const base64Imagem = imageMsg?.base64 || mensagem?.message?.base64 || mensagem?.base64;
   if (!base64Imagem) return null;
 
   const mimetype = imageMsg?.mimetype || 'image/jpeg';
@@ -40,8 +41,7 @@ function montarConteudoImagem(mensagem, textoComplementar) {
 }
 
 /**
- * Constrói o bloco de conteúdo multimodal a partir de um PDF mandado no
- * Admin. A Anthropic também lê PDF nativamente como documento.
+ * Constrói o bloco de conteúdo multimodal a partir de um PDF mandado no Admin.
  *
  * @param {object} mensagem
  * @param {string} textoComplementar
@@ -55,10 +55,9 @@ async function montarConteudoPdf(mensagem, textoComplementar) {
   const fileName = docMsg?.fileName || '';
   if (!mimetype.includes('pdf') && !fileName.toLowerCase().endsWith('.pdf')) return null;
 
-  let base64Pdf = mensagem?.message?.base64 || docMsg?.base64 || mensagem?.base64;
+  // FIX: busca base64 primeiro no campo específico do documento
+  let base64Pdf = docMsg?.base64 || mensagem?.message?.base64 || mensagem?.base64;
 
-  // Se não veio base64 direto (caso comum pra documentos, diferente de
-  // imagem/áudio), baixa via URL fornecida no payload.
   if (!base64Pdf && docMsg?.url) {
     base64Pdf = await baixarArquivoComoBase64(docMsg.url);
   }
@@ -82,13 +81,12 @@ async function montarConteudoPdf(mensagem, textoComplementar) {
 }
 
 /**
- * Processa uma planilha (.xlsx/.xls) mandada no Admin: baixa, extrai o
- * conteúdo como texto/tabela legível, e monta um bloco de texto pra IA
- * ler (planilha não é lida nativamente pela API, precisa converter).
+ * Processa uma planilha (.xlsx/.xls) mandada no Admin: extrai o conteúdo
+ * como texto/tabela legível para a IA ler.
  *
  * @param {object} mensagem
  * @param {string} textoComplementar
- * @returns {Promise<string|null>} texto pronto pra IA, ou null se não for planilha
+ * @returns {Promise<string|null>}
  */
 async function montarConteudoPlanilha(mensagem, textoComplementar) {
   const docMsg = mensagem?.message?.documentMessage;
@@ -100,7 +98,8 @@ async function montarConteudoPlanilha(mensagem, textoComplementar) {
     mimetype.includes('spreadsheet') || mimetype.includes('excel');
   if (!ehPlanilha) return null;
 
-  let base64Planilha = mensagem?.message?.base64 || docMsg?.base64 || mensagem?.base64;
+  // FIX: busca base64 primeiro no campo específico
+  let base64Planilha = docMsg?.base64 || mensagem?.message?.base64 || mensagem?.base64;
   if (!base64Planilha && docMsg?.url) {
     base64Planilha = await baixarArquivoComoBase64(docMsg.url);
   }
@@ -113,11 +112,22 @@ async function montarConteudoPlanilha(mensagem, textoComplementar) {
 
     let textoExtraido = `Planilha "${docMsg.fileName}" recebida no grupo Admin. Abas encontradas: ${nomesAbas.join(', ')}.\n\n`;
 
-    // Extrai cada aba como CSV simples, limitando tamanho pra não explodir o contexto
+    const LIMITE_CHARS = 4000;
+
     for (const nomeAba of nomesAbas.slice(0, 5)) {
       const aba = workbook.Sheets[nomeAba];
       const csv = XLSX.utils.sheet_to_csv(aba);
-      const csvLimitado = csv.length > 4000 ? csv.slice(0, 4000) + '\n[...conteúdo truncado, planilha muito grande...]' : csv;
+
+      // FIX: trunca na última quebra de linha antes do limite,
+      // evitando cortar no meio de uma linha CSV malformando os dados
+      let csvLimitado = csv;
+      if (csv.length > LIMITE_CHARS) {
+        const truncado = csv.slice(0, LIMITE_CHARS);
+        const ultimaLinha = truncado.lastIndexOf('\n');
+        csvLimitado = (ultimaLinha > 0 ? truncado.slice(0, ultimaLinha) : truncado)
+          + '\n[...conteúdo truncado, planilha muito grande...]';
+      }
+
       textoExtraido += `--- Aba "${nomeAba}" ---\n${csvLimitado}\n\n`;
     }
 
@@ -133,13 +143,17 @@ async function montarConteudoPlanilha(mensagem, textoComplementar) {
 }
 
 /**
- * Baixa um arquivo de uma URL e retorna em base64. Usado quando o
- * documento não vem com base64 direto no payload (caso comum pra
- * documentMessage, diferente de imagem/áudio que normalmente já vêm prontos).
+ * Baixa um arquivo de uma URL e retorna em base64.
+ * FIX: timeout de 15s para não travar indefinidamente
  */
 async function baixarArquivoComoBase64(url) {
   try {
-    const resposta = await fetch(url);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+    const resposta = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
+
     if (!resposta.ok) {
       console.error('[MidiaAdmin] Erro ao baixar arquivo da URL:', resposta.status);
       return null;
