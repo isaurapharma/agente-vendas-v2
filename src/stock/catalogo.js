@@ -15,6 +15,15 @@
 const fs   = require('fs');
 const path = require('path');
 
+// ── Caminhos dos arquivos de catálogo ────────────────────────────
+// FIX: declarado antes de qualquer uso, incluindo carregarCatalogo()
+function getCatalogoFilePath(tipo = 'normal') {
+  if (tipo === 'revenda') {
+    return path.resolve(process.env.CATALOGO_REVENDA_FILE_PATH || './data/catalogo-revenda.json');
+  }
+  return path.resolve(process.env.CATALOGO_FILE_PATH || './data/catalogo.json');
+}
+
 const CATALOGO_PADRAO = {
   durateston: `✅ *Durateston - Cooper Farmacêutica* 🇮🇳 ( Linha premium)
 *250mg/ml. Cx com 10 AMPOLAS*
@@ -392,483 +401,6 @@ Frasco 100cps 10mg/cps — R$125
 Frasco 100cps 10mg/cps — R$90`,
 
   diversos: `✅️ *Roaccutan Genérico*
-Cx com 30 cps moles 20mg/cps — R$150
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Ritalina Original*
-Cx com 30 comprimidos 10mg/cp — R$120
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Anastrozol Europharma*
-Cx com 30 comprimidos 1mg/cp — R$120
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Citrato de Tamoxifeno Farmacêutico*
-Cx com 30 comprimidos 20mg/cp — R$80
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Tadalafila Europharma*
-Cx com 30 comprimidos 5mg/cp — R$20`,
-
-  mistos: `✅️ *Mix 6 - Pharmacom Farmacêutica* 🇮🇳
-500mg/ml
-1️⃣ Masteron Enantato 200mg/ml
-2️⃣ Enantato de Testosterona 200mg/ml
-3️⃣ Trembolona Enantato 100mg/ml
-📌 Frasco 10ml — R$780
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Cutstack - Muscle Labs* 🐉
-200mg/ml
-1️⃣ Trembolona Enantato 50mg
-2️⃣ Testosterona Cipionato 100mg
-3️⃣ Masteron 50mg
-📌 Frasco 10ml — R$230`,
-};
-
-
-function getCatalogoFilePath(tipo = 'normal') {
-  if (tipo === 'revenda') {
-    return path.resolve(process.env.CATALOGO_REVENDA_FILE_PATH || './data/catalogo-revenda.json');
-  }
-  return path.resolve(process.env.CATALOGO_FILE_PATH || './data/catalogo.json');
-}
-
-// Carrega o catálogo persistido do disco. Se não existir ainda, usa o
-// CATALOGO_PADRAO como ponto de partida (primeira vez rodando) — pro
-// catálogo de revenda, começa com o padrão de revenda definido abaixo.
-// O Luiz pode atualizar pelo Admin a qualquer momento.
-const CATALOGO_REVENDA_PADRAO = {
-  durateston: `✅ *Durateston - Cooper Farmacêutica* ©️ (Linha premium) 🇮🇳
-*250mg/ml. Cx com 10 AMPOLAS*
-R$320
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Durateston - Pharmacom Farmacêutica* (Linha premium) 🇪🇺
-*300mg/ml. Frasco 10ml*
-R$290
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Durateston - Bratva Labs* ✴️
-*250mg/ml. Cx com 10 AMPOLA*
-R$200
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Durateston - Lander Land Linha Gold* 🥇
-*250mg/ml. Frasco 10ml*
-R$175
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Durateston - Muscle Labs India* 🐍
-*250mg/ml. Frasco 10ml*
-R$160
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Durateston - King Pharma* 👑
-*250mg/ml. Frasco 10ml*
-R$160 ❌ Em falta
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Durateston - Swiss Pharma* 🧬
-*250mg/ml. Frasco 10ml*
-R$110`,
-
-  enantato: `✅ *Enantato de Testosterona - Eminence Farmacêutica* ©️ 🇮🇳
-*250mg/ml. Cx com 10 AMPOLAS*
-R$320
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Enantato de Testosterona - Bratva Labs* ✴️
-*250mg/ml. Cx com 10 AMPOLA*
-R$200
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Enantato de Testosterona - Lander Land Linha Gold* 🥇
-*250mg/ml. Frasco 10ml*
-R$175
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Enantato de Testosterona - Muscle Labs India* 🐍
-*250mg/ml. Frasco 10ml*
-R$160
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Enantato de Testosterona - King Pharma* 👑
-*250mg/ml. Frasco 10ml*
-R$160 ❌ Em falta
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Enantato de Testosterona - Swiss Pharma* ⚕️
-*250mg/ml. Frasco 10ml*
-R$110`,
-
-  masteron: `✅️ *Masteron Propionato - Cooper Pharma* 🇮🇳
-*100mg/ml. Cx com 10 Ampolas*
-R$420 ❌ EM FALTA
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Masteron Propionato - Lander Land Linha Gold* 🥇
-*100mg/ml. Frasco 10ml*
-R$185
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Masteron Propionato - Bratva Labs* ✴️
-*100mg/ml. Frasco 10ml*
-R$170
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Masteron Propionato - Swiss Pharma* ⚕️
-*100mg/ml. Frasco 10ml*
-R$110
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Masteron Enantato - King Pharma* 👑
-*100mg/ml. Frasco 10ml*
-R$160
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Masteron Enantato - Swiss Pharma* 🧬
-*200mg/ml. Frasco 10ml*
-R$120`,
-
-  deposteron: `✅ *Deposteron - Cooper Farmacêutica* ©️ (Linha premium) 🇮🇳
-*250mg/ml. Cx com 10 AMPOLAS*
-R$320
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Deposteron - Muscle Labs India* 🐍
-*250mg/ml. Frasco 10ml*
-R$160
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Deposteron - Lander Land Linha Gold* 🥇
-*200mg/2ml. Frasco 10ml*
-R$135
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Deposteron - Swiss Pharma* 🧬
-*250mg/ml. Frasco 10ml*
-R$110
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Deposteron - Lander Land*
-*Cx com 3 ampolas 200mg/ampola de 2ml cada*
-R$70`,
-
-  primobolan: `✅️ *Primobolan - Muscle Labs* 🐍
-*100mg/ml. Frasco 10ml*
-R$315
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Primobolan - Lander Land Linha Gold* 🥇
-*100mg/ml. Frasco 10ml*
-R$340 ❌ Em falta, chega esta semana
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅ *Primobolan - King Pharma* 👑
-*100mg/ml. Frasco 10ml*
-R$310
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅ *Primobolan - Swiss Pharma* 🧬
-*100mg/ml. Frasco 10ml*
-R$180`,
-
-  deca: `✅ *Deca Mix - ZPHC Farmacêutica* ©️ 🇬🇧
-*300mg/ml. Frasco 10ml*
-R$330
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅ *Deca - Pharmacom Farmacêutica* ©️ 🇪🇺
-*300mg/ml. Cx com 10 AMPOLAS*
-R$320
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅ *Deca - Pharmacom Farmacêutica* (Linha premium) 🇪🇺
-*300mg/ml. Frasco 10ml*
-R$290
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅ *Deca - Oxygen Farmacêutica* ©️ 🇰🇼
-*250mg/ml. Cx com 10 AMPOLAS*
-R$220
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Deca - Lander Land Linha Gold* 🥇
-*200mg/ml. Frasco 10ml*
-R$175
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅ *Deca - Muscle Labs India* 🐍
-*300mg/ml. Frasco 10ml*
-R$160
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Deca - King Pharma* 👑
-*300mg/ml. Frasco 10ml*
-R$160
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Deca - Swiss Pharma* 🧬
-*300mg/ml. Frasco 10ml*
-R$110
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Deca - Lander Land*
-*200mg/ml. Frasco 5ml*
-R$110 ❌ Em falta`,
-
-  trembolona: `✅️ *Trembolona Acetato - Lander Land Gold* 🥇
-*100mg/ml. Frasco 10ml*
-R$185
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Trembolona Acetato - Muscle Labs India* 🐍
-*100mg/ml. Frasco 10ml*
-R$160
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Trembolona Acetato - Swiss Pharma* 🧬
-*100mg/ml. Frasco 10ml*
-R$110
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-☑️ *Trembolona Enantato - Lander Land Gold* 🥇
-*200mg/ml. Frasco 10ml*
-R$180
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-☑️ *Trembolona Enantato - Swiss Pharma* 🧬
-*200mg/ml. Frasco 10ml*
-R$110`,
-
-  oxandrolona: `✅️ *Oxandrolona - Lander Land*
-*10mg/cps. Frasco 50 comprimidos*
-R$210
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Oxandrolona - Lander Land*
-*5mg/cps. Frasco 100 comprimidos*
-R$210
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Oxandrolona Manipulada* 🧬
-*20mg/cps. Frasco 100 comprimidos*
-R$140
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Oxandrolona Manipulada* 🧬
-*10mg/cps. Frasco 100 comprimidos*
-R$110`,
-
-  boldenona: `✅️ *Boldenona - ZPHC Farmacêutica* 🇪🇺
-*250mg/ml. Frasco 10ml*
-R$200
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Boldenona - Lander Land Linha Gold* 🥇
-*250mg/ml. Frasco 10ml*
-R$175
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Boldenona - Muscle Labs India* 🐍🇮🇳
-*200mg/ml. Frasco 10ml*
-R$160`,
-
-  stanozolol: `✅️ *Stanozolol - Lander Land Injetável* 💉
-*Frasco 30ml 50mg/ml*
-R$145
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Stanozolol - Lander Land Injetável* 💉
-*Frasco 15ml 50mg/ml*
-R$100
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Stanozolol - Lander Land* 💊
-*Frasco 100cps 10mg/cps*
-R$90
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Stanozolol - Elite Pharma* 💊
-*Frasco 100cps 10mg/cps*
-R$65`,
-
-  dianabol: `☑️ *Dianabol - Pharmacom Farmacêutica* ©️🇮🇳
-*10mg/cps. Cx 100 comprimidos*
-R$150
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-☑️ *Dianabol - Lander Land*
-*10mg/cps. Frasco 100 comprimidos*
-R$105
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-☑️ *Dianabol - Swiss Pharma* ⚕️
-*10mg/cps. Frasco 100 comprimidos*
-R$70`,
-
-  hemogenim: `✅️ *Hemogenim - Pharmacom Farmacêutica* ©️🇮🇳
-*25mg/cps. Cx 100 comprimidos*
-R$250
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Hemogenim - King Pharma* 👑
-*50mg/cps. Cx com 50 comprimidos*
-R$170
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Hemogenim - Lander Land*
-*50mg/cps. Cx com 20 comprimidos*
-R$90`,
-
-  peptideos: `✅ *Peptídeos - GEN HEATH* 🧬 (Importado)
-
-📍GHK-cu 100mg — R$720
-📍Most-C 10mg — R$640
-📍Ipamorelin 10mg — R$640
-📍HGH Frag 176-191 5mg — R$640
-📍BPC 157 10mg — R$640
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Peptídeos - ZPHC Farmacêutica* 🧬 (Importado)
-
-Ipamorelin 5mg — R$300
-TB500 5mg — R$300
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *NEO Peptídeos* 🧬 (Importado)
-
-GHK-CU 100mg — R$500
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅ *Peptídeo - Better Performance* 🧬 (Nacional)
-
-📍Tesamorelin 5mg — R$160
-📍TB 500 5mg — R$160
-📍GHRp6 5mg — R$160`,
-
-  gh: `💎 *GH Somatropina (Biomanguinhos)*
-*Caixa com 4ui* — R$55
-🚨 Valor para pedidos acima de 10 cxs
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-💎 *GH Genotropin Caneta 36ui* — R$1.250`,
-
-  emagrecedores: `✅ *Retatrutida ZPHC*
-Cx fechada 120mg (5 frascos 24mg c/ diluente) — R$4.100
-Frasco 24mg c/ diluente — R$820
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅ *Retatrutida Oxygen*
-Frasco 40mg c/ diluente — R$1.100
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Retatrutida Synedica Caneta 40mg* — R$1.800
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *LIPOLESS (Tirzepatida)*
-Cx fechada 60mg — R$1.000
-Frasco 15mg — R$320
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✴️ *TG (Tirzepatida)*
-Cx fechada 60mg — R$1.000
-Frasco 15mg — R$320
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-☑️ *Mounjaro - Eli Lilly (Tirzepatida)*
-2,5mg (4 canetas) — R$1.420
-5mg (4 canetas) — R$2.000
-7,5mg (4 canetas) — R$2.500
-10mg (caneta) — R$2.100 🚨 Promoção
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-✅️ *Ozempic caneta 1mg* — R$920
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-🔥 *Clembuterol Veterinário Gel*
-Frasco 500ml — R$230
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-🔥 *Clembuterol - Lander Land Gold*
-Caixa 50 comprimidos 0.04mg — R$115
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-🔥 *Clembuterol Brontel*
-Caixa 20 comprimidos 0.02mg — R$40
-
-🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
-
-🔥 *Lipostabil*
-5 ampolas 5ml cada — R$100`,
-
-  diversos: `✅️ *Roaccutan Genérico*
 Cx com 30 cps moles 20mg/cps — R$130
 
 🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
@@ -928,9 +460,10 @@ R$170
 *100mg/ml. Frasco 10ml*
 R$110`,
 
+  // FIX: preço separado da marcação de falta (era "R$❌ EM FALTA")
   npp: `✅ *NPP - Cooper Farmacêutica* ©️ 🇮🇳
 *100mg/ml. Cx com 10 AMPOLAS*
-R$❌ EM FALTA
+R$280 ❌ EM FALTA
 
 🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
 
@@ -958,6 +491,7 @@ R$230
 ✅ *HCG Choriomum 5.000ui - Lander Land Linha Gold* 🥇
 R$220`,
 
+  // FIX: preço separado da marcação de falta (era "R$❌ Em falta")
   turinabol: `✅️ *Turinabol - Cooper Farmacêutica* 🇮🇳
 *10mg/cps. Frasco 50 comprimidos*
 R$320
@@ -966,7 +500,7 @@ R$320
 
 ✅️ *Turinabol - Muscle Labs India* 🐍
 *10mg/cps. Frasco 60 cps*
-R$❌ Em falta`,
+R$200 ❌ EM FALTA`,
 
   halotestin: `✅️ *Halotestin - Muscle Labs India* 🐍
 *10mg/cps. Frasco 30 comprimidos*
@@ -987,6 +521,119 @@ R$120`,
 R$230`,
 };
 
+// ── Catálogo de revenda (padrão de fábrica) ───────────────────
+// FIX: declarado ANTES de carregarCatalogo() para evitar ReferenceError
+const CATALOGO_REVENDA_PADRAO = {
+  durateston: `✅ *Durateston - Cooper Farmacêutica* ©️ (Linha premium) 🇮🇳
+*250mg/ml. Cx com 10 AMPOLAS*
+R$320
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Durateston - Pharmacom Farmacêutica* (Linha premium) 🇪🇺
+*300mg/ml. Frasco 10ml*
+R$290
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Durateston - Bratva Labs* ✴️
+*250mg/ml. Cx com 10 AMPOLA*
+R$200
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Durateston - Lander Land Linha Gold* 🥇
+*250mg/ml. Frasco 10ml*
+R$175
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Durateston - Muscle Labs India* 🐍
+*250mg/ml. Frasco 10ml*
+R$160
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Durateston - King Pharma* 👑
+*250mg/ml. Frasco 10ml*
+R$160 ❌ EM FALTA
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Durateston - Swiss Pharma* 🧬
+*250mg/ml. Frasco 10ml*
+R$110`,
+
+  enantato: `✅ *Enantato de Testosterona - Eminence Farmacêutica* ©️ 🇮🇳
+*250mg/ml. Cx com 10 AMPOLAS*
+R$320
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Enantato de Testosterona - Bratva Labs* ✴️
+*250mg/ml. Cx com 10 AMPOLA*
+R$200
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Enantato de Testosterona - Lander Land Linha Gold* 🥇
+*250mg/ml. Frasco 10ml*
+R$175
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Enantato de Testosterona - Muscle Labs India* 🐍
+*250mg/ml. Frasco 10ml*
+R$160
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Enantato de Testosterona - King Pharma* 👑
+*250mg/ml. Frasco 10ml*
+R$160 ❌ EM FALTA
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Enantato de Testosterona - Swiss Pharma* ⚕️
+*250mg/ml. Frasco 10ml*
+R$110`,
+
+  masteron: `✅️ *Masteron Propionato - Cooper Pharma* 🇮🇳
+*100mg/ml. Cx com 10 Ampolas*
+R$420 ❌ EM FALTA
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Masteron Propionato - Lander Land Linha Gold* 🥇
+*100mg/ml. Frasco 10ml*
+R$185
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Masteron Propionato - Bratva Labs* ✴️
+*100mg/ml. Frasco 10ml*
+R$170
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Masteron Propionato - Swiss Pharma* ⚕️
+*100mg/ml. Frasco 10ml*
+R$110
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Masteron Enantato - King Pharma* 👑
+*100mg/ml. Frasco 10ml*
+R$160
+
+🟰🟰🟰🟰🟰🟰🟰🟰🟰🟰
+
+✅️ *Masteron Enantato - Swiss Pharma* 🧬
+*200mg/ml. Frasco 10ml*
+R$120`,
+};
+
+// ── Persistência ──────────────────────────────────────────────
 function carregarCatalogo(tipo = 'normal') {
   try {
     const arquivo = getCatalogoFilePath(tipo);
@@ -997,6 +644,7 @@ function carregarCatalogo(tipo = 'normal') {
   } catch (err) {
     console.error(`[Catalogo] Erro ao carregar catálogo (${tipo}) do disco, usando padrão:`, err.message);
   }
+  // FIX: CATALOGO_REVENDA_PADRAO agora está declarado antes desta função
   return tipo === 'revenda' ? { ...CATALOGO_REVENDA_PADRAO } : { ...CATALOGO_PADRAO };
 }
 
@@ -1039,8 +687,7 @@ function listarCategorias(tipo = 'normal') {
   return Object.keys(getCatalogoAtivo(tipo));
 }
 
-// Substitui o texto completo de uma categoria (ex: o Luiz humano manda
-// uma tabela nova pronta) — cria a categoria se ela não existir ainda.
+// Substitui o texto completo de uma categoria
 function definirCategoria(categoria, textoNovo, tipo = 'normal') {
   const chave = String(categoria).toLowerCase().trim();
   const catalogo = getCatalogoAtivo(tipo);
@@ -1050,10 +697,9 @@ function definirCategoria(categoria, textoNovo, tipo = 'normal') {
   return { ok: true, categoria: chave, tipo };
 }
 
-// Marca um item específico (uma linha/marca dentro de uma categoria)
-// como em falta ou disponível de novo, inserindo/removendo uma marcação
-// visual "❌ EM FALTA" perto do nome do item dentro do texto da categoria.
-// Busca por um trecho do nome do item (ex: "Swiss Pharma", "Cooper").
+// Marca/desmarca item como em falta.
+// FIX: regex mais abrangente — remove "❌" e qualquer texto após ele na linha,
+// cobrindo variações como "❌ EM FALTA", "❌ Em falta", "❌ Em falta, chega esta semana"
 function marcarItemFalta(categoria, trechoNomeItem, emFalta = true, tipo = 'normal') {
   const chave = String(categoria).toLowerCase().trim();
   const catalogo = getCatalogoAtivo(tipo);
@@ -1066,7 +712,8 @@ function marcarItemFalta(categoria, trechoNomeItem, emFalta = true, tipo = 'norm
   let linhasEncontradas = 0;
 
   const linhasAtualizadas = linhas.map(linha => {
-    const linhaSemMarcacao = linha.replace(/\s*❌\s*EM FALTA\s*$/i, '').trim();
+    // FIX: remove ❌ e tudo que vier depois até o fim da linha (cobre todas as variações)
+    const linhaSemMarcacao = linha.replace(/\s*❌.*$/i, '').trimEnd();
     const contemTrecho = linha.toLowerCase().includes(String(trechoNomeItem).toLowerCase());
 
     if (contemTrecho) {
@@ -1090,8 +737,7 @@ function marcarItemFalta(categoria, trechoNomeItem, emFalta = true, tipo = 'norm
   return { ok: true, categoria: chave, item: trechoNomeItem, emFalta, tipo };
 }
 
-// Restaura o catálogo de uma categoria (ou de tudo) para o padrão original.
-// Só se aplica ao catálogo normal — o de revenda não tem padrão de fábrica.
+// Restaura catálogo para o padrão original (só catálogo normal tem padrão de fábrica)
 function restaurarPadrao(categoria = null) {
   if (categoria) {
     const chave = String(categoria).toLowerCase().trim();
