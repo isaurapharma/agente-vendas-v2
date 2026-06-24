@@ -877,7 +877,14 @@ async function processarMensagemAdmin(textoMensagem, conteudoMultimodal = null) 
       resultado = await client.messages.create({
         model: 'claude-sonnet-4-6',
         max_tokens: 4096,
-        system: buildSystemPromptAdmin(),
+        // PROMPT CACHING: system prompt cacheado por até 5 min
+        system: [
+          {
+            type: 'text',
+            text: buildSystemPromptAdmin(),
+            cache_control: { type: 'ephemeral' }
+          }
+        ],
         tools: TOOLS_ADMIN,
         messages: historicoAdmin
       });
