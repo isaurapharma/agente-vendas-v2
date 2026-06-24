@@ -7,8 +7,10 @@ const BASE = process.env.EVOLUTION_API_URL;
 const KEY  = process.env.EVOLUTION_API_KEY;
 const INST = process.env.EVOLUTION_INSTANCE;
 
+// FIX: instância única com timeout para TODAS as chamadas (antes marcarComoLida
+// e digitando usavam axios direto sem timeout, podendo travar indefinidamente)
 const api = axios.create({
-  baseURL: `${BASE}/message`,
+  baseURL: BASE,
   headers: {
     'Content-Type': 'application/json',
     'apikey': KEY
@@ -20,7 +22,7 @@ const api = axios.create({
 // Retorna { ok, messageId, data } para rastrear pedidos despachados
 async function enviarTexto(para, texto) {
   try {
-    const res = await api.post(`/sendText/${INST}`, {
+    const res = await api.post(`/message/sendText/${INST}`, {
       number: para,
       text: texto
     });
@@ -33,13 +35,15 @@ async function enviarTexto(para, texto) {
 }
 
 // ── Enviar imagem com legenda ─────────────────────────────────
-async function enviarImagem(para, urlOuBase64, legenda = '') {
+async function enviarImagem(para, urlOuBase64, legenda = '', mimetype = 'image/jpeg') {
   try {
-    const payload = urlOuBase64.startsWith('http')
-      ? { number: para, mediatype: 'image', mimetype: 'image/jpeg', media: urlOuBase64, caption: legenda }
-      : { number: para, mediatype: 'image', mimetype: 'image/jpeg', media: urlOuBase64, caption: legenda, encoding: 'base64' };
+    // FIX: detecção de URL mais robusta com regex
+    const ehUrl = /^https?:\/\//i.test(urlOuBase64);
+    const payload = ehUrl
+      ? { number: para, mediatype: 'image', mimetype, media: urlOuBase64, caption: legenda }
+      : { number: para, mediatype: 'image', mimetype, media: urlOuBase64, caption: legenda, encoding: 'base64' };
 
-    const res = await api.post(`/sendMedia/${INST}`, payload);
+    const res = await api.post(`/message/sendMedia/${INST}`, payload);
     return { ok: true, data: res.data };
   } catch (err) {
     console.error('[Evolution] Erro ao enviar imagem:', err?.response?.data || err.message);
@@ -48,29 +52,24 @@ async function enviarImagem(para, urlOuBase64, legenda = '') {
 }
 
 // ── Marcar mensagem como lida ─────────────────────────────────
+// FIX: agora usa a instância `api` com timeout configurado
 async function marcarComoLida(remoteJid, messageId) {
   try {
-    await axios.post(`${BASE}/chat/markMessageAsRead/${INST}`, {
+    await api.post(`/chat/markMessageAsRead/${INST}`, {
       readMessages: [{ remoteJid, id: messageId, fromMe: false }]
-    }, {
-      headers: { 'apikey': KEY }
     });
   } catch (_) {}
 }
 
 // ── Marcar chat como NÃO lido ─────────────────────────────────
 // Usado depois que o agente responde no grupo Admin, pra chamar atenção
-// de que teve atividade nova ali. Atenção: existe relato conhecido de
-// bug nesse endpoint específico da Evolution API em certas versões
-// (erro "myAppStateKey not present") — por isso loga o erro real em
-// vez de engolir silenciosamente, pra facilitar diagnóstico se falhar.
+// de que teve atividade nova ali. Existe relato de bug nesse endpoint
+// em certas versões da Evolution API — por isso loga o erro real.
 async function marcarComoNaoLida(remoteJid, messageId) {
   try {
-    await axios.post(`${BASE}/chat/markChatUnread/${INST}`, {
+    await api.post(`/chat/markChatUnread/${INST}`, {
       lastMessage: [{ remoteJid, fromMe: true, id: messageId }],
       chat: remoteJid
-    }, {
-      headers: { 'apikey': KEY }
     });
     return { ok: true };
   } catch (err) {
@@ -80,13 +79,12 @@ async function marcarComoNaoLida(remoteJid, messageId) {
 }
 
 // ── Simular "digitando..." ────────────────────────────────────
+// FIX: agora usa a instância `api` com timeout configurado
 async function digitando(remoteJid, duracaoMs = 2000) {
   try {
-    await axios.post(`${BASE}/chat/sendPresence/${INST}`, {
+    await api.post(`/chat/sendPresence/${INST}`, {
       number: remoteJid,
       options: { presence: 'composing', delay: duracaoMs }
-    }, {
-      headers: { 'apikey': KEY }
     });
   } catch (_) {}
 }
