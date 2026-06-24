@@ -654,7 +654,15 @@ async function processarMensagem(clienteNumero, mensagemTexto, clienteNome = 'cl
       resultado = await client.messages.create({
         model: 'claude-sonnet-4-6',
         max_tokens: 1024,
-        system: buildSystemPrompt(_foraHorario, _msgHorario, sessao.historico.length <= 1, ehRevendedor),
+        // PROMPT CACHING: system prompt cacheado por até 5 min
+        // Cache hit custa 10% do input normal — economia de ~70% no system prompt
+        system: [
+          {
+            type: 'text',
+            text: buildSystemPrompt(_foraHorario, _msgHorario, sessao.historico.length <= 1, ehRevendedor),
+            cache_control: { type: 'ephemeral' }
+          }
+        ],
         tools: TOOLS,
         messages: sessao.historico
       });
