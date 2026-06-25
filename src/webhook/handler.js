@@ -1,7 +1,7 @@
 // src/webhook/handler.js
 const fs   = require('fs');
 const path = require('path');
-const { processarMensagem, getSessao, registrarMensagemHumana, getClienteDoAviso, processarRespostaLuizParaCliente } = require('../agent/agente');
+const { processarMensagem, getSessao, registrarMensagemHumana, getClienteDoAviso, processarRespostaLuizParaCliente, liberarPausaLuiz, salvarSessoesNoDisco } = require('../agent/agente');
 const { enviarTexto, marcarComoLida, marcarComoNaoLida, digitando } = require('./evolution');
 const { isAutorizado, adicionarContato, removerContato } = require('../stock/contatos');
 const { adicionarApelidos, removerApelidos, verApelidos, listarTodosApelidos } = require('../stock/apelidos');
@@ -280,7 +280,6 @@ async function handleGrupoAdmin(mensagem, remoteJid) {
         const sessao = getSessao(aviso.clienteNumero);
         if (/R\$\s*\d+|reais|correios/i.test(textoMensagem) && sessao.endereco) {
           sessao.enderecoJaCadastrado = true;
-          const { salvarSessoesNoDisco } = require('../agent/agente');
           salvarSessoesNoDisco();
         }
 
@@ -293,6 +292,45 @@ async function handleGrupoAdmin(mensagem, remoteJid) {
     const jidOrigemForward = extrairJidForward(mensagem);
     let textoParaAgente = textoMensagem;
     if (jidOrigemForward) textoParaAgente = `[MENSAGEM ENCAMINHADA DE OUTRO CHAT — JID de origem: ${jidOrigemForward}]\n${textoMensagem}`;
+
+    // FIX: detecta padrão "55219999999 mensagem do luiz" escrito livremente no Admin
+    // Quando Luiz escreve número + resposta sem dar reply, repassa direto pro cliente
+    const matchNumero = textoMensagem?.match(/^(55\d{10,11})\s+(.+)$/s);
+    if (matchNumero) {
+      const numeroCliente = matchNumero[1];
+      const msgParaCliente = matchNumero[2].trim();
+      console.log(`[Admin] Padrão número+msg detectado → repassando pro ${numeroCliente}: ${msgParaCliente}`);
+
+      try {
+        const sessao = getSessao(numeroCliente);
+
+        // Se for frete/valor, marca endereço como já coletado
+        if (/R\$\s*\d+|frete|reais|\d+\s*(reais|pila|conto)/i.test(msgParaCliente) && sessao.endereco) {
+          sessao.enderecoJaCadastrado = true;
+        }
+
+        // Adiciona resposta do Luiz ao histórico e libera IA pra continuar a venda
+        sessao.historico.push({
+          role: 'user',
+          content: `[Luiz autorizou/respondeu sobre o pedido deste cliente]: "${msgParaCliente}". Repasse essa informação pro cliente de forma natural e continue a venda normalmente.`
+        });
+
+        liberarPausaLuiz(numeroCliente);
+        salvarSessoesNoDisco();
+
+        // Processa e envia ao cliente
+        const respostaCliente = await processarMensagem(numeroCliente, null, null);
+        if (respostaCliente) {
+          const jidCliente = `${numeroCliente}@s.whatsapp.net`;
+          await enviarTexto(jidCliente, respostaCliente);
+        }
+
+        await enviarTexto(remoteJid, `✅ Repassei pro ${numeroCliente}!`);
+        return;
+      } catch (err) {
+        console.error('[Admin] Erro ao repassar mensagem do Luiz:', err.message);
+      }
+    }
 
     const legendaOuTexto = textoMensagem?.startsWith('[') ? null : textoMensagem;
     let mm = null;
